@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prince_analysis_tools"
+version = "0.6.0"  # Update this manually to match your package version.
+description = "Tools for Analysis of UHECR propagation with PriNCe"
+readme = "README.md"
+license = { text = "BSD 3-Clause License" }
+requires-python = ">=3.6"
+authors = [
+  { name = "Jonas Heinze", email = "jonas.heinze@gmail.com" }
+]
+urls = { Homepage = "https://github.com/joheinze/PriNCe-analysis-tools" }
+classifiers = [
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Physics",
+  "Intended Audience :: Science/Research",
+  "Development Status :: 4 - Beta",
+  "License :: OSI Approved :: BSD License"
+]
+dependencies = [
+  "iminuit",
+  "scipy",
+  "numpy",
+  "tqdm",
+  "requests"
+]
+
+[project.optional-dependencies]
+test = ["pytest", "matplotlib"]
+
+[tool.setuptools]
+packages = ["prince_analysis_tools"]
+include-package-data = true  # if you rely on MANIFEST.in or package data inclusion
+
+[tool.black]
+line-length = 88
+
+[tool.mypy]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-q -ra --ff -n auto"
+testpaths = ["tests"]
+filterwarnings = ["error::FutureWarning", "error::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 90
+extend-ignore = ["E203"]
+
+[tool.pydocstyle]
+convention = "numpy"

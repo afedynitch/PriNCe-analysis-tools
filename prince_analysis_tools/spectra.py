@@ -318,6 +318,180 @@ Xmax2019 = {
     "sys_Low": (Xmax2019[5] * u.g * u.cm**-2).value,
 }
 
+# ==================================================================
+# Pierre Auger 2025 — combined spectrum (PierreAuger:2025eun, PRL 135:241002)
+# and DNN-based Xmax/RMS (PierreAuger:2024nzw, PRD 111:022003).
+# ------------------------------------------------------------------
+# Spectrum source: Table V of PRL 135:241002 (combined declination band
+# [−84.8°, +24.8°]); correlation matrix Table VI accounts for the
+# dominant 14% energy-scale systematic.
+# Xmax / σ(Xmax) source: Table IV of PRD 111:022003 (SD-DNN reconstruction,
+# 2004-2018 data), 15 bins covering log10(E/eV) = 18.5 to >19.9.
+#
+# Schema additions vs the 2017/2019 dicts:
+#   • Both stat (`stat_up`/`stat_low`) and sys (`sys_Up`/`sys_Low`) are
+#     reported asymmetrically. The combined `upper_err`/`lower_err`
+#     keys are populated (stat ⊕ sys in quadrature) so the existing
+#     diagonal chi² works untouched.
+#   • `corr` is the spectrum bin-to-bin correlation matrix (18×18) for
+#     the bins where flux is measured (log₁₀(E/EeV) 0.45..2.15). The
+#     opt-in correlation-aware chi² in UHECROptimizer(use_corr=True)
+#     consumes it.
+# ==================================================================
+
+# --- Spectrum: Table V ---------------------------------------------
+# Columns: log10(E/EeV), J, stat_up, stat_low, sys_up, sys_low, exponent
+# J and all errors are scaled by 10^exponent (column 6) in units of
+# EeV⁻¹ km⁻² sr⁻¹ yr⁻¹.
+_auger2025_tableV = np.array(
+    [
+        [0.45, 1.8614, 0.0065, 0.0065, 0.7, 0.6,  0],
+        [0.55, 8.808,  0.040,  0.040,  3.2, 2.5, -1],
+        [0.65, 4.183,  0.022,  0.022,  1.4, 1.1, -1],
+        [0.75, 2.107,  0.014,  0.014,  0.6, 0.4, -1],
+        [0.85, 1.186,  0.009,  0.009,  0.3, 0.3, -1],
+        [0.95, 6.590,  0.059,  0.059,  1.5, 1.4, -2],
+        [1.05, 3.668,  0.039,  0.039,  0.9, 0.8, -2],
+        [1.15, 2.001,  0.024,  0.026,  0.5, 0.6, -2],
+        [1.25, 9.982,  0.152,  0.165,  3.0, 2.8, -3],
+        [1.35, 5.027,  0.097,  0.101,  1.5, 1.3, -3],
+        [1.45, 2.600,  0.062,  0.067,  0.7, 0.7, -3],
+        [1.55, 1.294,  0.039,  0.043,  0.4, 0.3, -3],
+        [1.65, 5.88,   0.23,   0.26,   2.7, 2.4, -4],
+        [1.75, 2.27,   0.13,   0.14,   1.2, 1.1, -4],
+        [1.85, 6.98,   0.67,   0.69,   5.3, 3.4, -5],
+        [1.95, 1.89,   0.29,   0.32,   1.9, 0.6, -5],
+        [2.05, 5.3,    1.4,    1.6,    6.0, 2.8, -6],
+        [2.15, 2.5,    0.7,    1.1,    0.1, 1.9, -6],
+    ]
+).T
+
+# --- Spectrum correlation matrix: Table VI (upper triangle) --------
+# 18 bins (log₁₀E/EeV 0.45..2.15). Symmetric matrix.
+_auger2025_corr_upper = np.array(
+    [
+        [1.000, 0.984, 0.983, 0.980, 0.985, 0.991, 0.986, 0.976, 0.971, 0.970, 0.980, 0.987, 0.990, 0.983, 0.974, 0.946, 0.957, 0.788],
+        [0.0,   1.000, 0.999, 0.999, 0.993, 0.993, 0.986, 0.977, 0.978, 0.977, 0.981, 0.986, 0.990, 0.997, 0.994, 0.973, 0.963, 0.848],
+        [0.0,   0.0,   1.000, 0.999, 0.994, 0.993, 0.984, 0.975, 0.977, 0.975, 0.983, 0.987, 0.991, 0.997, 0.994, 0.972, 0.962, 0.853],
+        [0.0,   0.0,   0.0,   1.000, 0.993, 0.991, 0.982, 0.970, 0.971, 0.970, 0.978, 0.987, 0.989, 0.997, 0.994, 0.974, 0.960, 0.851],
+        [0.0,   0.0,   0.0,   0.0,   1.000, 0.997, 0.986, 0.977, 0.967, 0.965, 0.986, 0.996, 0.997, 0.992, 0.982, 0.949, 0.955, 0.859],
+        [0.0,   0.0,   0.0,   0.0,   0.0,   1.000, 0.992, 0.985, 0.977, 0.974, 0.986, 0.994, 0.994, 0.990, 0.981, 0.953, 0.951, 0.842],
+        [0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   1.000, 0.994, 0.991, 0.989, 0.980, 0.985, 0.982, 0.976, 0.971, 0.945, 0.949, 0.805],
+        [0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   1.000, 0.993, 0.992, 0.981, 0.973, 0.974, 0.964, 0.958, 0.924, 0.941, 0.813],
+        [0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   1.000, 0.998, 0.976, 0.964, 0.963, 0.964, 0.965, 0.943, 0.937, 0.803],
+        [0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   1.000, 0.973, 0.961, 0.963, 0.962, 0.962, 0.942, 0.943, 0.787],
+        [0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   1.000, 0.986, 0.984, 0.974, 0.963, 0.922, 0.941, 0.850],
+        [0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   1.000, 0.993, 0.983, 0.974, 0.937, 0.944, 0.842],
+        [0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   1.000, 0.989, 0.978, 0.946, 0.962, 0.832],
+        [0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   1.000, 0.994, 0.974, 0.959, 0.852],
+        [0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   1.000, 0.981, 0.949, 0.849],
+        [0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   1.000, 0.923, 0.785],
+        [0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   1.000, 0.756],
+        [0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   1.000],
+    ]
+)
+
+
+def _build_auger2025():
+    """Construct the auger2025 spectrum dict from Table V + Table VI."""
+    log10E_EeV = _auger2025_tableV[0]
+    scale = 10.0 ** _auger2025_tableV[6]
+    # Energies → GeV
+    energy_GeV = (10 ** log10E_EeV * u.EeV).to_value(u.GeV)
+    # J(E) and errors → E³·J in GeV² cm⁻² s⁻¹ sr⁻¹ to match auger2017/2019.
+    diff_units = u.EeV ** -1 * u.km ** -2 * u.sr ** -1 * u.yr ** -1
+    e3 = (10 ** log10E_EeV * u.EeV) ** 3
+    target_unit = u.GeV ** 2 * u.cm ** -2 * u.s ** -1 * u.sr ** -1
+
+    def to_e3j(arr):
+        return (e3 * arr * scale * diff_units).to_value(target_unit)
+
+    spec = to_e3j(_auger2025_tableV[1])
+    stat_up = to_e3j(_auger2025_tableV[2])
+    stat_low = to_e3j(_auger2025_tableV[3])
+    sys_up = to_e3j(_auger2025_tableV[4])
+    sys_low = to_e3j(_auger2025_tableV[5])
+    # Combined errors (stat ⊕ sys in quadrature, side-appropriate)
+    upper_err = np.sqrt(stat_up ** 2 + sys_up ** 2)
+    lower_err = np.sqrt(stat_low ** 2 + sys_low ** 2)
+
+    # Symmetrise the upper-triangle correlation matrix.
+    corr = _auger2025_corr_upper + _auger2025_corr_upper.T - np.eye(_auger2025_corr_upper.shape[0])
+
+    return {
+        "energy": energy_GeV,
+        "spectrum": spec,
+        # Legacy combined errors (backwards-compatible with the diagonal
+        # chi² in UHECROptimizer.get_chi2_spectrum).
+        "upper_err": upper_err,
+        "lower_err": lower_err,
+        # Split errors (consumed by the opt-in correlation-aware chi²).
+        "stat_up": stat_up,
+        "stat_low": stat_low,
+        "sys_Up": sys_up,
+        "sys_Low": sys_low,
+        # Bin-to-bin correlation matrix from Table VI; same ordering
+        # as `energy`. Dominated by the 14% energy-scale systematic.
+        "corr": corr,
+    }
+
+
+auger2025 = _build_auger2025()
+
+
+# --- Xmax / σ(Xmax): Table IV of PRD 111:022003 -------------------
+# Columns: log10E_low, log10E_high, log10E_center, ⟨Xmax⟩, stat,
+#          sys_up, sys_low, σ(Xmax), stat, sys_up, sys_low (g cm⁻²)
+_auger2025_tableIV = np.array(
+    [
+        [18.5, 18.6, 18.55, 757.0, 0.5,  7.7,  9.6, 48.8, 0.6, 9.1, 4.8],
+        [18.6, 18.7, 18.65, 758.8, 0.5,  7.8,  9.2, 46.3, 0.6, 8.7, 4.8],
+        [18.7, 18.8, 18.75, 759.5, 0.5,  7.9,  8.8, 43.4, 0.7, 8.3, 4.8],
+        [18.8, 18.9, 18.85, 761.8, 0.5,  8.0,  8.5, 39.7, 0.6, 8.0, 4.8],
+        [18.9, 19.0, 18.95, 765.7, 0.5,  8.2,  8.2, 38.4, 0.7, 7.6, 4.8],
+        [19.0, 19.1, 19.05, 770.0, 0.6,  8.4,  7.9, 38.8, 1.0, 7.3, 4.8],
+        [19.1, 19.2, 19.15, 769.9, 0.6,  8.7,  7.7, 34.0, 0.8, 7.1, 4.8],
+        [19.2, 19.3, 19.25, 774.0, 0.8,  9.1,  7.5, 33.2, 0.9, 7.0, 4.8],
+        [19.3, 19.4, 19.35, 774.7, 0.9,  9.5,  7.4, 30.7, 1.2, 6.9, 4.8],
+        [19.4, 19.5, 19.45, 775.3, 1.0, 10.0,  7.3, 27.3, 1.6, 6.8, 4.8],
+        [19.5, 19.6, 19.55, 778.6, 1.3, 10.5,  7.3, 26.3, 1.3, 6.8, 4.8],
+        [19.6, 19.7, 19.64, 783.2, 1.4, 11.0,  7.3, 24.2, 1.8, 6.8, 4.8],
+        [19.7, 19.8, 19.74, 787.2, 2.0, 11.6,  7.5, 20.7, 1.4, 6.8, 4.8],
+        [19.8, 19.9, 19.85, 794.5, 3.6, 12.2,  7.8, 25.1, 3.9, 6.8, 4.8],
+        # Last row is the integral bin > 19.9; centre 20.00, upper edge 20.10 (nominal).
+        [19.9, 20.1, 20.00, 793.9, 4.5, 13.1,  8.3, 21.8, 5.4, 6.8, 4.8],
+    ]
+).T
+
+
+def _build_xmax2025_dicts():
+    lo = (10 ** _auger2025_tableIV[0] * u.eV).to_value(u.GeV)
+    hi = (10 ** _auger2025_tableIV[1] * u.eV).to_value(u.GeV)
+    centre = (10 ** _auger2025_tableIV[2] * u.eV).to_value(u.GeV)
+    xmax = {
+        "energy": centre,
+        "energy_Low": centre - lo,
+        "energy_Up": hi - centre,
+        "val": _auger2025_tableIV[3],
+        "stat": _auger2025_tableIV[4],
+        "sys_Up": _auger2025_tableIV[5],
+        "sys_Low": _auger2025_tableIV[6],
+    }
+    xrms = {
+        "energy": centre,
+        "energy_Low": centre - lo,
+        "energy_Up": hi - centre,
+        "val": _auger2025_tableIV[7],
+        "stat": _auger2025_tableIV[8],
+        "sys_Up": _auger2025_tableIV[9],
+        "sys_Low": _auger2025_tableIV[10],
+    }
+    return xmax, xrms
+
+
+Xmax2025, XRMS2025 = _build_xmax2025_dicts()
+
+
 # ------------------------------------------------------------------
 # TA spectrum from ICRC 2015 (combined spectrum)
 # ------------------------------------------------------------------

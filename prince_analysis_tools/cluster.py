@@ -428,7 +428,7 @@ class PropagationProject(object):
         chi2, minres, results = results[0]
         egrid = results[0]["egrid"]
         state = results[0]["state"]
-        known_spec = np.array(results[0]["known_spec"], dtype=np.int)
+        known_spec = np.array(results[0]["known_spec"], dtype=int)
         frac = np.array(minres[1][2:])
         injected = len(results)
 

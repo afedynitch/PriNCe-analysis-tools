@@ -13,7 +13,38 @@ class UHECROptimizer(object):
         Emin=6e9,
         norms=None,
         xmax_model=None,
+        use_corr=False,
+        corr_jitter=1e-3,
     ):
+        """Per-cell χ² + iMinuit inner fit for UHECR source-parameter scans.
+
+        Parameters
+        ----------
+        single_results : list of UHECRPropagationResult
+            One PriNCe result per injection species.
+        spectrum, Xmax, XRMS : dict
+            Auger data fixtures (e.g. ``auger2017`` / ``auger2025``).
+        ncoids : sequence of int, optional
+            Injection PDG ids; defaults to a positional range.
+        Emin : float
+            Energy threshold (GeV) below which bins are excluded from χ².
+        norms : ndarray, optional
+            Initial per-species norms.
+        xmax_model : {"epos", "sibyll", "qgsjet"} or None
+            Hadronic-interaction model for the Xmax conversion.
+        use_corr : bool
+            **Opt-in correlation-aware spectrum χ².** When True and
+            ``spectrum["corr"]`` is present, the spectrum χ² becomes
+            ``Δᵀ C⁻¹ Δ`` with ``C = diag(stat²) + outer(sys, sys) ⊙ corr``.
+            The asymmetric error sides are chosen bin-by-bin based on
+            whether the model is above or below the data. Default False
+            preserves the legacy diagonal χ² used by the grid scan.
+        corr_jitter : float
+            Small relative jitter added to the diagonal of the
+            correlation matrix to keep it positive-definite under
+            OCR-rounded inputs. 1e-3 is well below any meaningful
+            statistical weight; only matters at chol/inv time.
+        """
         self.Emin = Emin
 
         if xmax_model is None or xmax_model == "epos":
@@ -35,10 +66,32 @@ class UHECROptimizer(object):
 
         self.lst_res = np.array(single_results)
         if norms is None:
-            norms = np.ones_like(self.lst_res, dtype=np.float)
+            norms = np.ones_like(self.lst_res, dtype=float)
         if ncoids is None:
             ncoids = list(range(len(self.lst_res)))
         self.ncoids = ncoids
+
+        # Correlation-aware χ² setup. We pre-build the boolean mask + a
+        # statics covariance scaffold so the hot path in fit_data_minuit
+        # only does a small linear solve per evaluation.
+        self.use_corr = bool(use_corr) and "corr" in spectrum
+        self._corr_solver = None
+        if self.use_corr:
+            sl = np.flatnonzero(self.egrid_spectrum > self.Emin)
+            corr = np.asarray(spectrum["corr"], dtype=float)
+            if corr.shape[0] != self.egrid_spectrum.size:
+                raise ValueError(
+                    "spectrum['corr'] shape {} does not match energy bins {}".format(
+                        corr.shape, self.egrid_spectrum.size
+                    )
+                )
+            self._corr_sub = corr[np.ix_(sl, sl)].copy()
+            # OCR-rounded matrices can sit infinitesimally outside the
+            # positive-definite cone. Jitter the diagonal so cholesky
+            # is robust.
+            self._corr_sub.flat[:: self._corr_sub.shape[0] + 1] += corr_jitter
+            self._corr_indices = sl
+            self._corr_jitter = corr_jitter
 
         self._create_interpolators()
         self.compute_combined_result(norms)
@@ -111,6 +164,9 @@ class UHECROptimizer(object):
         if self.lst_res is not None and norms is not None:
             self.compute_combined_result(norms, deltaE)
 
+        if self.use_corr:
+            return self._get_chi2_spectrum_corr()
+
         # chi2 for values above Emin
         sl = np.argwhere(self.egrid_spectrum > self.Emin)
         delta = self.res_spectrum[sl] - self.spectrum["spectrum"][sl]
@@ -131,6 +187,45 @@ class UHECROptimizer(object):
         return np.sum(
             (delta / error) ** 2
         )  # + np.sum((delta_penalty / error_penalty)**2)
+
+    def _get_chi2_spectrum_corr(self):
+        """Correlation-aware spectrum χ². Folds the bin-to-bin correlation
+        matrix (``spectrum["corr"]``) into the residual:
+
+            Δ = model - data, σ_i = stat_side_i ⊕ sys_side_i (per bin)
+            C_ij = (stat_i if i==j else 0) + sys_i sys_j corr_ij
+            χ² = Δᵀ C⁻¹ Δ
+
+        Asymmetric error sides are picked per bin from the sign of Δ.
+        The correlation matrix's diagonal carries a small jitter
+        (``corr_jitter``) to defend against the OCR-rounded inputs not
+        being strictly positive-definite.
+        """
+        sl = self._corr_indices
+        delta = self.res_spectrum[sl] - self.spectrum["spectrum"][sl]
+        model_above = delta > 0
+        spec = self.spectrum
+        if "stat_up" in spec and "stat_low" in spec:
+            stat = np.where(model_above, spec["stat_up"][sl], spec["stat_low"][sl])
+        else:
+            # Fall back: legacy upper_err / lower_err are combined stat+sys; use them
+            # as stat and zero out sys to recover the diagonal χ² when no split is
+            # available.
+            stat = np.where(model_above, spec["upper_err"][sl], spec["lower_err"][sl])
+        if "sys_Up" in spec and "sys_Low" in spec:
+            sys_ = np.where(model_above, spec["sys_Up"][sl], spec["sys_Low"][sl])
+        else:
+            sys_ = np.zeros_like(stat)
+
+        # Covariance: diagonal stat² + outer-product sys correlated by `corr`.
+        cov = (sys_[:, None] * sys_[None, :]) * self._corr_sub
+        cov.flat[:: cov.shape[0] + 1] += stat ** 2
+        # Solve C x = Δ via cholesky (cov is positive-definite up to OCR-rounded jitter).
+        from scipy.linalg import cho_factor, cho_solve
+
+        c, lower = cho_factor(cov, lower=True, check_finite=False)
+        x = cho_solve((c, lower), delta, check_finite=False)
+        return float(np.dot(delta, x))
 
     def get_chi2_Xmax(self, norms=None, deltaE=0.0, xmax_shift=0.0):
         if self.lst_res is not None and norms is not None:
@@ -205,80 +300,82 @@ class UHECROptimizer(object):
             ]
         )
 
-    def fit_data_minuit(self, spectrum_only=False, minimizer_args={}):
+    def fit_data_minuit(self, spectrum_only=False, minimizer_args=None):
+        """Profile chi² fit over (deltaE, xmax_shift, per-species norms).
+
+        Rewritten 2026-05-11 for iminuit 2.x (kwargs ``forced_parameters``,
+        ``error_<name>``, ``limit_<name>`` were removed; ``errordef`` /
+        ``print_level`` are now attributes, not kwargs). The grid logic
+        (5×5 multi-start when both shifts float; single-start otherwise) is
+        preserved verbatim.
+        """
         from iminuit import Minuit
 
-        def chi2(deltaE, xmax_shift, *norms):
-            norms = np.array(norms)
-            # norms = np.array(norms)
+        if minimizer_args is None:
+            minimizer_args = {}
+
+        n_pids = len(self.ncoids)
+
+        def chi2(*args):
+            deltaE = args[0]
+            xmax_shift = args[1]
+            norms = np.array(args[2:])
             if spectrum_only is True:
-                result = self.get_chi2_spectrum(norms=norms, deltaE=deltaE)
-            elif spectrum_only == "xmax":
-                result = self.get_chi2_spectrum(
+                return self.get_chi2_spectrum(norms=norms, deltaE=deltaE)
+            if spectrum_only == "xmax":
+                return self.get_chi2_spectrum(
                     norms=norms, deltaE=deltaE
                 ) + self.get_chi2_Xmax(
                     norms=norms, deltaE=deltaE, xmax_shift=xmax_shift
                 )
-            else:
-                result = self.get_chi2_total(
-                    norms=norms, deltaE=deltaE, xmax_shift=xmax_shift
-                )
-            return result
+            return self.get_chi2_total(
+                norms=norms, deltaE=deltaE, xmax_shift=xmax_shift
+            )
 
         init_norm = (
-            self.spectrum["spectrum"][14] / self.res_spectrum[14] / len(self.ncoids)
+            self.spectrum["spectrum"][14] / self.res_spectrum[14] / n_pids
         )
-        # trick if spectrum is zero, will iMinuit will give nan anyway
+        # If model spectrum is zero at bin 14, fall back to unit norm.
         init_norm = init_norm if np.isfinite(init_norm) else 1.0
         m_best = None
 
-        if "fix_deltaE" in minimizer_args and not minimizer_args["fix_deltaE"]:
-            delta_tries = [-0.13, -0.8, 0.0, 0.8, 0.13]
-            # delta_tries = [-0.12, 0., 0.12]
+        # Multi-start when a shift is allowed to float; otherwise single start at 0.
+        fix_deltaE_default = True
+        fix_xmax_shift_default = True
+        fix_deltaE = bool(minimizer_args.get("fix_deltaE", fix_deltaE_default))
+        fix_xmax_shift = bool(minimizer_args.get("fix_xmax_shift", fix_xmax_shift_default))
+        delta_tries = [0.0] if fix_deltaE else [-0.13, -0.08, 0.0, 0.08, 0.13]
+        shift_tries = [0.0] if fix_xmax_shift else [-0.9, -0.5, 0.0, 0.5, 0.9]
 
-        else:
-            delta_tries = [0.0]
+        arg_names = (
+            ["deltaE", "xmax_shift"]
+            + ["norm{:}".format(pid) for pid in self.ncoids]
+        )
 
-        if "fix_xmax_shift" in minimizer_args and not minimizer_args["fix_xmax_shift"]:
-            pass
-            shift_tries = [-0.9, -0.5, 0.0, 0.5, 0.9]
-            # shift_tries = [-0.9, 0., 0.9]
-        else:
-            shift_tries = [0.0]
+        # Same bounds / step sizes as the original 1.x invocation.
+        norm_lo = init_norm / 1e6
+        norm_hi = init_norm * 1e6
+        errors = [0.1, 0.2] + [init_norm / 100.0] * n_pids
+        limits = [(-0.14, 0.14), (-1.0, 1.0)] + [(norm_lo, norm_hi)] * n_pids
 
         for delta_start in delta_tries:
             for shift_start in shift_tries:
-
-                arg_names = (
-                    ["deltaE"]
-                    + ["xmax_shift"]
-                    + ["norm{:}".format(pid) for pid in self.ncoids]
-                )
-                start = [delta_start] + [shift_start] + [init_norm] * len(self.ncoids)
-                error = [0.1] + [0.2] + [init_norm / 100] * len(self.ncoids)
-                limit = (
-                    [(-0.14, 0.14)]
-                    + [(-1.0, 1.0)]
-                    + [(init_norm / 1e6, init_norm * 1e6)] * len(self.ncoids)
-                )
-
-                params = {"fix_deltaE": True, "fix_xmax_shift": True, "print_level": 0}
-                params.update({name: val for name, val in zip(arg_names, start)})
-                params.update(
-                    {"error_" + name: val for name, val in zip(arg_names, error)}
-                )
-                params.update(
-                    {"limit_" + name: val for name, val in zip(arg_names, limit)}
-                )
-
-                params.update(minimizer_args)
-                m = Minuit(chi2, forced_parameters=arg_names, errordef=1.0, **params)
-                # m.print_param()
+                start = [delta_start, shift_start] + [init_norm] * n_pids
+                m = Minuit(chi2, *start, name=arg_names)
+                m.errordef = 1.0
+                m.print_level = int(minimizer_args.get("print_level", 0))
+                for name, err in zip(arg_names, errors):
+                    m.errors[name] = err
+                for name, lim in zip(arg_names, limits):
+                    m.limits[name] = lim
+                m.fixed["deltaE"] = fix_deltaE
+                m.fixed["xmax_shift"] = fix_xmax_shift
+                # Norms always free.
+                for nm in arg_names[2:]:
+                    m.fixed[nm] = False
                 m.migrad(ncall=100000)
 
-                if m_best is None:
-                    m_best = m
-                if m.fval < m_best.fval:
+                if m_best is None or m.fval < m_best.fval:
                     m_best = m
 
         return m_best

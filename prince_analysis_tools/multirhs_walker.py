@@ -1,0 +1,131 @@
+"""Forward-model wrapper that drives PriNCe's multi-RHS ETD2 solver.
+
+`MultiRHSWalker.compute_models_batch` packs ``K_live × N_species`` independent
+propagation problems into a single :class:`MultiRHSPropagationSolverETD2`
+solve, then hands back a per-livepoint list of detached
+:class:`UHECRPropagationResult` objects that the existing
+:class:`UHECROptimizer` consumes unchanged.
+
+Each "live point" is one outer parameter set ``(gamma, rmax, m)``. Within a
+live point, each injection species (e.g. p, He, N, Si, Fe) becomes a separate
+RHS column with its own ``AugerFitSource``. The k-th column index is laid out
+as ``k = j * N_species + i`` (j = live-point index, i = species index).
+"""
+
+import numpy as np
+
+
+class MultiRHSWalker(object):
+    """Batched forward-model wrapper backed by ``MultiRHSPropagationSolverETD2``.
+
+    Constructor mirrors :class:`UHECRWalker` so the same data fixtures
+    (spectrum, Xmax, XRMS) can be reused.
+    """
+
+    def __init__(self, prince_run, spectrum, xmax, xrms, progressbar=False):
+        self.prince_run = prince_run
+        self.spectrum = spectrum
+        self.xmax = xmax
+        self.xrms = xrms
+        self.progressbar = progressbar
+
+    def compute_models_batch(
+        self,
+        particle_ids,
+        batch_params,
+        sclass="auger",
+        initial_z=1.0,
+        final_z=0.0,
+        max_step=1e-2,
+        enable_partial_diff_jacobian=True,
+    ):
+        """Propagate K outer parameter sets × N_species species in one solve.
+
+        Parameters
+        ----------
+        particle_ids : sequence of int
+            Injection species PDG-like ids (e.g. [101, 402, 1407, 2814, 5626]).
+        batch_params : sequence of dict
+            One dict per live point, with keys ``gamma``, ``rmax``, ``m``
+            (and optionally ``rscale`` for ``sclass="rflex"``). ``m`` is
+            passed through unchanged to the source class — typically the
+            ``("simple", value)`` tuple used by the existing grid scan.
+        sclass : {"auger", "simple", "rflex"}
+            Source class selector; matches :meth:`UHECRWalker.compute_models`.
+        initial_z, final_z, max_step
+            Forwarded to the solver. Defaults match the grid scan.
+        enable_partial_diff_jacobian : bool
+            Forwarded to the solver constructor.
+
+        Returns
+        -------
+        list[list[UHECRPropagationResult]]
+            Outer list has length ``len(batch_params)``. Each entry is a list
+            of ``len(particle_ids)`` detached results (state arrays copied out
+            of the multi-RHS column views so the caller can safely re-solve).
+        """
+        from prince_cr.solvers import (
+            MultiRHSPropagationSolverETD2,
+            UHECRPropagationResult,
+        )
+        from prince_cr.cr_sources import (
+            AugerFitSource,
+            SimpleSource,
+            RigidityFlexSource,
+        )
+
+        N_species = len(particle_ids)
+        K_live = len(batch_params)
+        K_total = K_live * N_species
+
+        solver = MultiRHSPropagationSolverETD2(
+            initial_z=initial_z,
+            final_z=final_z,
+            prince_run=self.prince_run,
+            K=K_total,
+            enable_partial_diff_jacobian=enable_partial_diff_jacobian,
+        )
+
+        for j, p in enumerate(batch_params):
+            gamma = p["gamma"]
+            rmax = p["rmax"]
+            m = p["m"]
+            for i, ncoid in enumerate(particle_ids):
+                k = j * N_species + i
+                if sclass == "auger":
+                    params = {ncoid: (gamma, rmax, 1.0)}
+                    source = AugerFitSource(
+                        self.prince_run, params=params, m=m, norm=1.0
+                    )
+                elif sclass == "simple":
+                    params = {ncoid: (gamma, rmax, 1.0)}
+                    source = SimpleSource(
+                        self.prince_run, params=params, m=m, norm=1.0
+                    )
+                elif sclass == "rflex":
+                    rscale = p.get("rscale", 1.0)
+                    params = {ncoid: (gamma, rmax, rscale, 1.0)}
+                    source = RigidityFlexSource(
+                        self.prince_run, params=params, m=m, norm=1.0
+                    )
+                else:
+                    raise ValueError("Unknown source class: {!r}".format(sclass))
+                solver[k].add_source_class(source)
+
+        solver.solve(dz=max_step, verbose=False, progressbar=self.progressbar)
+
+        egrid = solver.egrid
+        spec_man = solver.spec_man
+        results_per_live = []
+        for j in range(K_live):
+            per_live = []
+            for i in range(N_species):
+                k = j * N_species + i
+                # Detach: copy the column view's state into a fresh result so
+                # the optimizer can be called from the caller after the solver
+                # falls out of scope or gets re-solved on the next batch.
+                col_state = np.asarray(solver[k].res.state).copy()
+                per_live.append(UHECRPropagationResult(col_state, egrid, spec_man))
+            results_per_live.append(per_live)
+
+        return results_per_live

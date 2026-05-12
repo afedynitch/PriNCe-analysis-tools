@@ -31,8 +31,17 @@ class UHECROptimizer(object):
             Energy threshold (GeV) below which bins are excluded from χ².
         norms : ndarray, optional
             Initial per-species norms.
-        xmax_model : {"epos", "sibyll", "qgsjet"} or None
-            Hadronic-interaction model for the Xmax conversion.
+        xmax_model : {"epos", "sibyll", "qgsjet", "fluka"} or None
+            Hadronic-interaction model for the Xmax conversion. The
+            ``"fluka"`` option selects ``XmaxSimple.FLUKA`` — the
+            XmaxSimple-form fit to Anatoli's per-species FLUKA shower
+            simulations (see
+            ``prince-fluka-utils/notebooks/fit_fluka_xmax.ipynb``). The
+            Auger-2024 ΔXmax prior is **not defined** for ``"fluka"``;
+            using it together with ``apply_auger_xmax_shift=True`` will
+            raise (FLUKA-Xmax already absorbs the bulk of the Auger
+            ΔXmax(Sibyll) shift, so an additional prior on top would
+            double-count).
         use_corr : bool
             **Opt-in correlation-aware spectrum χ².** When True and
             ``spectrum["corr"]`` is present, the spectrum χ² becomes
@@ -68,11 +77,13 @@ class UHECROptimizer(object):
         elif xmax_model == "sibyll":
             self.XmaxModel = XmaxSimple(model=XmaxSimple.Sibyll23)
             xmax_model_key = "sibyll"
+        elif xmax_model == "fluka":
+            self.XmaxModel = XmaxSimple(model=XmaxSimple.FLUKA)
+            xmax_model_key = "fluka"
         else:
             raise ValueError(
-                "Unsupported xmax_model={!r}; choose epos/sibyll/qgsjet".format(
-                    xmax_model
-                )
+                "Unsupported xmax_model={!r}; choose "
+                "epos/sibyll/qgsjet/fluka".format(xmax_model)
             )
         self.xmax_model_key = xmax_model_key
 

@@ -121,6 +121,33 @@ class XmaxSimple(object):
     }
     QGSJetII04 = convert_to_namedtuple(QGSJetII04, name="QGSJetII04")
 
+    # -------------------------------------------------------------
+    # FLUKA-Xmax: XmaxSimple-form fit to Anatoli's per-species FLUKA
+    # shower simulations (10 data points: A in {1, 4, 14, 28, 56, 130,
+    # 208}, E in {5.6e18, 2.8e19, 5.6e19, 1.12e20} eV). Fitted in
+    # UH-UHECR-Fluka-Prince/runs/2026-05-12_fluka-xmax-fit/ with
+    # scipy.optimize.curve_fit and Sibyll-2.3d as the starting point;
+    # mean and variance fitted independently. Residual RMS at the
+    # data points: 1.16 g/cm^2 in <Xmax>, 0.46 g/cm^2 in sigma(Xmax)
+    # -- inside the FLUKA per-point statistical error. The notebook
+    # producing these numbers lives in
+    # prince-fluka-utils/notebooks/fit_fluka_xmax.ipynb.
+    # -------------------------------------------------------------
+    FLUKA = {
+        "X0": 846.3044,    # +-  2.4376  # g cm**-2
+        "D":   63.6062,    # +-  3.3584  # g cm**-2
+        "xi":  -1.4201,    # +-  2.0606  # g cm**-2
+        "delta": 0.8321,   # +-  0.8593  # g cm**-2
+        "p0": 1921.7419,   # +- 284.62  # g**2 cm**-4
+        "p1": 1441.1596,   # +- 303.62  # g**2 cm**-4
+        "p2": -647.6684,   # +- 235.62  # g**2 cm**-4
+        "a0":  -0.30695,   # +-   0.0131
+        "a1":  -0.03589,   # +-   0.0157
+        "b":    0.029459,  # +-   0.000922
+        "E0":   1e10,      # GeV  (== 10^19 eV)
+    }
+    FLUKA = convert_to_namedtuple(FLUKA, name="FLUKA")
+
     # Per-HIM ΔXmax shifts measured by the Pierre Auger Observatory in the
     # energy range 10^18.5 to 10^19.0 eV using the 2D (S(1000), Xmax) hybrid
     # template fit. Source: PRD 109, 102001 (2024) Table III — bibkey

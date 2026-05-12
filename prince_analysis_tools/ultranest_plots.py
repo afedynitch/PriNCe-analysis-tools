@@ -364,6 +364,8 @@ def _build_xmax_model(name):
         return XmaxSimple(model=XmaxSimple.Sibyll23)
     if name == "qgsjet":
         return XmaxSimple(model=XmaxSimple.QGSJetII04)
+    if name == "fluka":
+        return XmaxSimple(model=XmaxSimple.FLUKA)
     raise ValueError("Unknown Xmax model: {!r}".format(name))
 
 

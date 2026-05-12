@@ -124,27 +124,61 @@ class XmaxSimple(object):
     # -------------------------------------------------------------
     # FLUKA-Xmax: XmaxSimple-form fit to Anatoli's per-species FLUKA
     # shower simulations (10 data points: A in {1, 4, 14, 28, 56, 130,
-    # 208}, E in {5.6e18, 2.8e19, 5.6e19, 1.12e20} eV). Fitted in
-    # UH-UHECR-Fluka-Prince/runs/2026-05-12_fluka-xmax-fit/ with
-    # scipy.optimize.curve_fit and Sibyll-2.3d as the starting point;
-    # mean and variance fitted independently. Residual RMS at the
-    # data points: 1.16 g/cm^2 in <Xmax>, 0.46 g/cm^2 in sigma(Xmax)
-    # -- inside the FLUKA per-point statistical error. The notebook
-    # producing these numbers lives in
-    # prince-fluka-utils/notebooks/fit_fluka_xmax.ipynb.
+    # 208}, E in {5.6e18, 2.8e19, 5.6e19, 1.12e20} eV). Mean form is
+    # identical to EPOS-LHC / Sibyll-2.3d / QGSJet-II-04. Variance form
+    # differs:
+    #
+    #     sigma^2_proton(E) = exp( p0 + p1 * eps + p2 * eps^2 )
+    #     eps = log10(E / E0),   E0 = 1e19 eV.
+    #
+    # The exp form is positive-definite at every energy, which the
+    # ordinary additive quadratic (other HIMs above) is not by
+    # construction. With FLUKA's narrow data energy range, the
+    # additive fit landed at p2 < 0 (peaked parabola), opening below
+    # logE ~ 18.06 -- harmless for the chi^2 (which only evaluates at
+    # data energies) but cosmetically broken in any plot extending
+    # below the data range. The exp form fits the FLUKA data points
+    # identically (chi^2 = 4.45, RMS(d sigma) = 0.457 g/cm^2,
+    # max|d sigma| = 0.96 g/cm^2 -- bit-identical to the additive
+    # form) and gives smooth, physically reasonable extrapolation
+    # outside the FLUKA support.
+    #
+    # XmaxSimple.get_var_Xmax dispatches on the ``variance_form``
+    # field below; other HIM namedtuples have no such field and fall
+    # through getattr() to the legacy ``quadratic`` form.
+    #
+    # Refit: UH-UHECR-Fluka-Prince/runs/2026-05-12_fluka-xmax-refit/.
+    # Authoritative notebook + raw FLUKA points live in
+    # prince-fluka-utils/{notebooks/fit_fluka_xmax.ipynb,
+    # data/fluka-xmax/}. Both should be kept in sync with this
+    # parameter set when new FLUKA points land.
     # -------------------------------------------------------------
     FLUKA = {
-        "X0": 846.3044,    # +-  2.4376  # g cm**-2
-        "D":   63.6062,    # +-  3.3584  # g cm**-2
-        "xi":  -1.4201,    # +-  2.0606  # g cm**-2
-        "delta": 0.8321,   # +-  0.8593  # g cm**-2
-        "p0": 1921.7419,   # +- 284.62  # g**2 cm**-4
-        "p1": 1441.1596,   # +- 303.62  # g**2 cm**-4
-        "p2": -647.6684,   # +- 235.62  # g**2 cm**-4
-        "a0":  -0.30695,   # +-   0.0131
-        "a1":  -0.03589,   # +-   0.0157
-        "b":    0.029459,  # +-   0.000922
-        "E0":   1e10,      # GeV  (== 10^19 eV)
+        "X0":    846.3044, # +-  2.4376  # g cm**-2
+        "D":      63.6063, # +-  3.3584  # g cm**-2
+        "xi":     -1.4201, # +-  2.0606  # g cm**-2
+        "delta":   0.8321, # +-  0.8593  # g cm**-2
+        # Variance: sigma^2_p(E) = exp(p0 + p1*eps + p2*eps^2).
+        # Fitted on the 10 FLUKA points ⊕ a 49-point HIM-consensus weak
+        # prior (sigma_prior = 10 g/cm^2; grid logE in {18.0..21.0} x
+        # A in {1,4,14,28,56,130,208}; HIM mean of EPOS-LHC /
+        # Sibyll-2.3d / QGSJet-II-04 sigma(Xmax)). The prior is loose
+        # enough that FLUKA stat errors dominate at the FLUKA data
+        # points (RMS(d sigma) = 0.58 g/cm^2, max|d sigma| = 1.45 -
+        # within stat) but bend the extrapolation tails up toward the
+        # HIM consensus where FLUKA is silent. Without the prior, the
+        # shape factor (1 + a(eps)*lnA + b*ln^2 A) goes negative for
+        # super-heavy A at logE > 20.2 (a^2/(4b) > 1), pushing the
+        # ^130Te / ^208Pb curves toward 0. With the prior the heavy-A
+        # tails stay at the HIM-mean band.
+        "p0":      7.9720, # +-  0.0605  # log(g**2 cm**-4)
+        "p1":     -0.1199, # +-  0.1165
+        "p2":     -0.0427, # +-  0.0624
+        "a0":     -0.3358, # +-  0.0049
+        "a1":     -0.0028, # +-  0.0035
+        "b":       0.0303, # +-  0.0009
+        "E0":      1e10,   # GeV  (== 10^19 eV)
+        "variance_form": "expquad",
     }
     FLUKA = convert_to_namedtuple(FLUKA, name="FLUKA")
 
@@ -250,9 +284,19 @@ class XmaxSimple(object):
         # following ref eq. (2.5)
         fE = m.xi - m.D / np.log(10) + m.delta * np.log10(E / m.E0)
 
-        # following ref eq. (2.9)
-        var_proton = m.p0 + m.p1 * np.log10(E / m.E0) + m.p2 * np.log10(E / m.E0) ** 2
-        a = m.a0 + m.a1 * np.log10(E / m.E0)
+        # following ref eq. (2.9) — variance proton-baseline.
+        # The legacy form (EPOS-LHC, Sibyll-2.3d, QGSJet-II-04) is an
+        # additive quadratic in eps = log10(E / E0). XmaxSimple.FLUKA
+        # carries variance_form="expquad", in which (p0, p1, p2) are
+        # the coefficients of an exponentiated quadratic — positive at
+        # every energy by construction. Other namedtuples have no such
+        # field; getattr falls through to "quadratic".
+        eps = np.log10(E / m.E0)
+        if getattr(m, "variance_form", "quadratic") == "expquad":
+            var_proton = np.exp(m.p0 + m.p1 * eps + m.p2 * eps**2)
+        else:
+            var_proton = m.p0 + m.p1 * eps + m.p2 * eps**2
+        a = m.a0 + m.a1 * eps
 
         # following ref eq. (2.11)
         mean_lnA2 = var_lnA + mean_lnA**2

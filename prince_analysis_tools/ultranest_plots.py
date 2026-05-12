@@ -51,8 +51,8 @@ def _combined_result(fit, theta):
     Returns ``(combined_result, deltaE, xshift, norms, minres, optimizer)``.
     """
     minres, opt = fit.recompute_fit(theta)
-    deltaE = float(minres.values["deltaE"]) if "deltaE" in minres.values else 0.0
-    xshift = float(minres.values["xmax_shift"]) if "xmax_shift" in minres.values else 0.0
+    deltaE = float(minres.values["deltaE"]) if "deltaE" in minres.parameters else 0.0
+    xshift = float(minres.values["xmax_shift"]) if "xmax_shift" in minres.parameters else 0.0
     norms = np.array([float(minres.values["norm{}".format(p)]) for p in fit.particle_ids])
 
     combined = opt.lst_res[0] * float(norms[0])
@@ -83,9 +83,9 @@ def _combined_result_batch(fit, theta_array):
     )
     for models in results_per_live:
         minres, opt = fit._inner_fit(models)
-        deltaE = float(minres.values["deltaE"]) if "deltaE" in minres.values else 0.0
+        deltaE = float(minres.values["deltaE"]) if "deltaE" in minres.parameters else 0.0
         xshift = (
-            float(minres.values["xmax_shift"]) if "xmax_shift" in minres.values else 0.0
+            float(minres.values["xmax_shift"]) if "xmax_shift" in minres.parameters else 0.0
         )
         norms = np.array(
             [float(minres.values["norm{}".format(p)]) for p in fit.particle_ids]
@@ -380,18 +380,23 @@ def _xmax_panel(fit, theta, kind, savepath, ax, figsize, data_label,
     if theta is None:
         theta = fit.best_fit_theta()
     combined, deltaE, xshift, _norms, _minres, _opt = _combined_result(fit, theta)
+    dxmax = (
+        float(_minres.values["auger_dxmax"])
+        if "auger_dxmax" in _minres.parameters else 0.0
+    )
     model = _build_xmax_model(fit.xmax_model)
 
-    def curve_for(combined_i, deltaE_i):
+    def curve_for(combined_i, deltaE_i, dxmax_i=0.0):
+        # auger_dxmax shifts ⟨Xmax⟩ only — σ(Xmax) is untouched.
         nuclei = [el for el in combined_i.known_species if el >= 100]
         egrid, mean_lnA, var_lnA = combined_i.get_lnA(nuclei)
         e_shift = egrid * (1.0 + deltaE_i)
         if kind == "mean":
-            return e_shift, model.get_mean_Xmax(mean_lnA, e_shift)
+            return e_shift, model.get_mean_Xmax(mean_lnA, e_shift) + dxmax_i
         var, _ = model.get_var_Xmax(mean_lnA, var_lnA, e_shift)
         return e_shift, np.sqrt(var)
 
-    e_map, y_map = curve_for(combined, deltaE)
+    e_map, y_map = curve_for(combined, deltaE, dxmax)
 
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
@@ -423,8 +428,12 @@ def _xmax_panel(fit, theta, kind, savepath, ax, figsize, data_label,
         pick = rng.choice(len(samples), size=min(n_band, len(samples)), replace=False)
         chosen = samples[pick]
         curves = []
-        for combined_i, deltaE_i, _, _, _, _ in _combined_result_batch(fit, chosen):
-            e_i, y_i = curve_for(combined_i, deltaE_i)
+        for combined_i, deltaE_i, _, _, minres_i, _ in _combined_result_batch(fit, chosen):
+            dxmax_i = (
+                float(minres_i.values["auger_dxmax"])
+                if "auger_dxmax" in minres_i.parameters else 0.0
+            )
+            e_i, y_i = curve_for(combined_i, deltaE_i, dxmax_i)
             curves.append(np.interp(e_map, e_i, y_i,
                                     left=np.nan, right=np.nan))
         band = np.array(curves)
@@ -468,6 +477,8 @@ def _xmax_panel(fit, theta, kind, savepath, ax, figsize, data_label,
         r"$\Delta_E={:+.3f}$".format(deltaE),
         r"$\Delta_{{X}}={:+.2f}$".format(xshift),
     ]
+    if kind == "mean" and "auger_dxmax" in _minres.parameters:
+        title_bits.append(r"$\Delta_{{\rm dx}}={:+.2f}$".format(dxmax))
     if n_band > 0:
         title_bits.append(r"$n_{{\rm band}}={}$".format(n_band))
     ax.set_title(", ".join(title_bits), fontsize=10)

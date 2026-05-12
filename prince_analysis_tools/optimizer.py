@@ -15,6 +15,7 @@ class UHECROptimizer(object):
         xmax_model=None,
         use_corr=False,
         corr_jitter=1e-3,
+        apply_auger_xmax_shift=False,
     ):
         """Per-cell χ² + iMinuit inner fit for UHECR source-parameter scans.
 
@@ -44,15 +45,43 @@ class UHECROptimizer(object):
             correlation matrix to keep it positive-definite under
             OCR-rounded inputs. 1e-3 is well below any meaningful
             statistical weight; only matters at chol/inv time.
+        apply_auger_xmax_shift : bool
+            **Opt-in Auger-2024 ΔXmax shift on the model ⟨Xmax⟩.** When True,
+            ``fit_data_minuit`` floats an extra nuisance ``auger_dxmax``
+            (g cm^-2) that is *added* to the predicted ⟨Xmax⟩ (σ(Xmax) is
+            untouched). An asymmetric-Gaussian prior centred on the
+            per-HIM measurement (PRD 109, 102001 (2024) Table III,
+            PierreAuger:2024neu) contributes ``((auger_dxmax - μ)/σ_side)²``
+            to the χ², where ``σ_side`` is stat ⊕ sys in quadrature on each
+            side. Requires a supported ``xmax_model``
+            ({"epos","sibyll","qgsjet"}). Default False reproduces the
+            pre-2026-05-12 chi² exactly.
         """
         self.Emin = Emin
 
         if xmax_model is None or xmax_model == "epos":
             self.XmaxModel = XmaxSimple(model=XmaxSimple.EPOSLHC)
+            xmax_model_key = "epos"
         elif xmax_model == "qgsjet":
             self.XmaxModel = XmaxSimple(model=XmaxSimple.QGSJetII04)
+            xmax_model_key = "qgsjet"
         elif xmax_model == "sibyll":
             self.XmaxModel = XmaxSimple(model=XmaxSimple.Sibyll23)
+            xmax_model_key = "sibyll"
+        else:
+            raise ValueError(
+                "Unsupported xmax_model={!r}; choose epos/sibyll/qgsjet".format(
+                    xmax_model
+                )
+            )
+        self.xmax_model_key = xmax_model_key
+
+        self.apply_auger_xmax_shift = bool(apply_auger_xmax_shift)
+        self._auger_dxmax_prior = None
+        if self.apply_auger_xmax_shift:
+            self._auger_dxmax_prior = XmaxSimple.auger_2024_dxmax_prior(
+                xmax_model_key
+            )
 
         # print self.XmaxModel, self.XmaxModel.model
         # spectral data
@@ -227,24 +256,38 @@ class UHECROptimizer(object):
         x = cho_solve((c, lower), delta, check_finite=False)
         return float(np.dot(delta, x))
 
-    def get_chi2_Xmax(self, norms=None, deltaE=0.0, xmax_shift=0.0):
+    def get_chi2_Xmax(
+        self, norms=None, deltaE=0.0, xmax_shift=0.0, auger_dxmax=None
+    ):
+        """χ² of the mean-Xmax data vs the (optionally shifted) model.
+
+        ``auger_dxmax`` (g cm^-2, default None = off) is added to the model
+        ⟨Xmax⟩ before the residual is taken — this is the per-HIM Auger-2024
+        ΔXmax shift; σ(Xmax) is untouched. The Gaussian prior penalty is
+        applied separately via :meth:`get_chi2_auger_dxmax_prior` so this
+        method's χ² remains purely data-driven.
+        """
         if self.lst_res is not None and norms is not None:
             self.compute_combined_result(norms, deltaE)
 
         # chi2 for values above Emin
         sl = np.argwhere(self.egrid_xmax > self.Emin)
 
+        model_xmax = self.res_xmax[sl]
+        if auger_dxmax is not None:
+            model_xmax = model_xmax + float(auger_dxmax)
+
         if xmax_shift == 0.0:
-            delta = self.res_xmax[sl] - self.Xmax["val"][sl]
+            delta = model_xmax - self.Xmax["val"][sl]
         elif xmax_shift > 0.0:
             delta = (
-                self.res_xmax[sl]
+                model_xmax
                 - self.Xmax["val"][sl]
                 + xmax_shift * self.Xmax["sys_Up"][sl]
             )
         elif xmax_shift < 0.0:
             delta = (
-                self.res_xmax[sl]
+                model_xmax
                 - self.Xmax["val"][sl]
                 + xmax_shift * self.Xmax["sys_Low"][sl]
             )
@@ -288,26 +331,55 @@ class UHECROptimizer(object):
 
         return np.sum((delta / error) ** 2)
 
-    def get_chi2_total(self, norms=None, deltaE=0.0, xmax_shift=0):
+    def get_chi2_auger_dxmax_prior(self, auger_dxmax):
+        """Asymmetric-Gaussian prior penalty on ``auger_dxmax``.
+
+        Penalty = ``((auger_dxmax - μ) / σ_side)²``, with σ_side = stat ⊕ sys
+        on the up/low side per Table III of PRD 109, 102001 (2024)
+        (PierreAuger:2024neu). Returns 0.0 if the prior is not active
+        (i.e. ``apply_auger_xmax_shift=False`` or ``auger_dxmax`` is None).
+        """
+        if (
+            self._auger_dxmax_prior is None
+            or auger_dxmax is None
+        ):
+            return 0.0
+        central, sigma_up, sigma_low = self._auger_dxmax_prior
+        delta = float(auger_dxmax) - central
+        sigma = sigma_up if delta >= 0.0 else sigma_low
+        return (delta / sigma) ** 2
+
+    def get_chi2_total(
+        self, norms=None, deltaE=0.0, xmax_shift=0, auger_dxmax=None
+    ):
         if self.lst_res is not None and norms is not None:
             self.compute_combined_result(norms, deltaE)
 
         return sum(
             [
                 self.get_chi2_spectrum(),
-                self.get_chi2_Xmax(xmax_shift=xmax_shift),
+                self.get_chi2_Xmax(xmax_shift=xmax_shift, auger_dxmax=auger_dxmax),
                 self.get_chi2_VarXmax(xmax_shift=xmax_shift),
+                self.get_chi2_auger_dxmax_prior(auger_dxmax),
             ]
         )
 
     def fit_data_minuit(self, spectrum_only=False, minimizer_args=None):
-        """Profile chi² fit over (deltaE, xmax_shift, per-species norms).
+        """Profile chi² fit over (deltaE, xmax_shift, [auger_dxmax,] per-species norms).
 
         Rewritten 2026-05-11 for iminuit 2.x (kwargs ``forced_parameters``,
         ``error_<name>``, ``limit_<name>`` were removed; ``errordef`` /
         ``print_level`` are now attributes, not kwargs). The grid logic
         (5×5 multi-start when both shifts float; single-start otherwise) is
         preserved verbatim.
+
+        When ``self.apply_auger_xmax_shift`` is True, an additional
+        nuisance ``auger_dxmax`` (g cm^-2) is floated with an
+        asymmetric-Gaussian prior centred on the per-HIM measurement
+        (PRD 109, 102001 (2024) Table III). It enters via
+        :meth:`get_chi2_Xmax` (model-side shift on ⟨Xmax⟩ only) and
+        :meth:`get_chi2_auger_dxmax_prior` (penalty). It is started at
+        the measured central value and limited to ±5 σ on each side.
         """
         from iminuit import Minuit
 
@@ -315,21 +387,35 @@ class UHECROptimizer(object):
             minimizer_args = {}
 
         n_pids = len(self.ncoids)
+        apply_dxmax = self.apply_auger_xmax_shift
 
         def chi2(*args):
             deltaE = args[0]
             xmax_shift = args[1]
-            norms = np.array(args[2:])
+            if apply_dxmax:
+                auger_dxmax = args[2]
+                norms = np.array(args[3:])
+            else:
+                auger_dxmax = None
+                norms = np.array(args[2:])
             if spectrum_only is True:
                 return self.get_chi2_spectrum(norms=norms, deltaE=deltaE)
             if spectrum_only == "xmax":
-                return self.get_chi2_spectrum(
-                    norms=norms, deltaE=deltaE
-                ) + self.get_chi2_Xmax(
-                    norms=norms, deltaE=deltaE, xmax_shift=xmax_shift
+                return (
+                    self.get_chi2_spectrum(norms=norms, deltaE=deltaE)
+                    + self.get_chi2_Xmax(
+                        norms=norms,
+                        deltaE=deltaE,
+                        xmax_shift=xmax_shift,
+                        auger_dxmax=auger_dxmax,
+                    )
+                    + self.get_chi2_auger_dxmax_prior(auger_dxmax)
                 )
             return self.get_chi2_total(
-                norms=norms, deltaE=deltaE, xmax_shift=xmax_shift
+                norms=norms,
+                deltaE=deltaE,
+                xmax_shift=xmax_shift,
+                auger_dxmax=auger_dxmax,
             )
 
         init_norm = (
@@ -347,20 +433,36 @@ class UHECROptimizer(object):
         delta_tries = [0.0] if fix_deltaE else [-0.13, -0.08, 0.0, 0.08, 0.13]
         shift_tries = [0.0] if fix_xmax_shift else [-0.9, -0.5, 0.0, 0.5, 0.9]
 
-        arg_names = (
-            ["deltaE", "xmax_shift"]
-            + ["norm{:}".format(pid) for pid in self.ncoids]
-        )
-
-        # Same bounds / step sizes as the original 1.x invocation.
         norm_lo = init_norm / 1e6
         norm_hi = init_norm * 1e6
-        errors = [0.1, 0.2] + [init_norm / 100.0] * n_pids
-        limits = [(-0.14, 0.14), (-1.0, 1.0)] + [(norm_lo, norm_hi)] * n_pids
+        norm_names = ["norm{:}".format(pid) for pid in self.ncoids]
+
+        if apply_dxmax:
+            central, sigma_up, sigma_low = self._auger_dxmax_prior
+            arg_names = ["deltaE", "xmax_shift", "auger_dxmax"] + norm_names
+            errors = [0.1, 0.2, 0.5 * (sigma_up + sigma_low) / 5.0] + [
+                init_norm / 100.0
+            ] * n_pids
+            limits = [
+                (-0.14, 0.14),
+                (-1.0, 1.0),
+                (central - 5.0 * sigma_low, central + 5.0 * sigma_up),
+            ] + [(norm_lo, norm_hi)] * n_pids
+            dxmax_init = central
+        else:
+            arg_names = ["deltaE", "xmax_shift"] + norm_names
+            errors = [0.1, 0.2] + [init_norm / 100.0] * n_pids
+            limits = [(-0.14, 0.14), (-1.0, 1.0)] + [(norm_lo, norm_hi)] * n_pids
 
         for delta_start in delta_tries:
             for shift_start in shift_tries:
-                start = [delta_start, shift_start] + [init_norm] * n_pids
+                if apply_dxmax:
+                    start = (
+                        [delta_start, shift_start, dxmax_init]
+                        + [init_norm] * n_pids
+                    )
+                else:
+                    start = [delta_start, shift_start] + [init_norm] * n_pids
                 m = Minuit(chi2, *start, name=arg_names)
                 m.errordef = 1.0
                 m.print_level = int(minimizer_args.get("print_level", 0))
@@ -370,8 +472,11 @@ class UHECROptimizer(object):
                     m.limits[name] = lim
                 m.fixed["deltaE"] = fix_deltaE
                 m.fixed["xmax_shift"] = fix_xmax_shift
-                # Norms always free.
-                for nm in arg_names[2:]:
+                if apply_dxmax:
+                    # auger_dxmax always floats when the flag is on — the
+                    # Gaussian prior keeps it identifiable.
+                    m.fixed["auger_dxmax"] = False
+                for nm in norm_names:
                     m.fixed[nm] = False
                 m.migrad(ncall=100000)
 

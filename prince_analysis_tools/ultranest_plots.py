@@ -149,8 +149,9 @@ def plot_corner(fit, savepath=None, labels=None, **corner_kwargs):
     """Corner plot of the posterior over outer parameters.
 
     Uses ``corner`` if installed, otherwise falls back to a plain matplotlib
-    hist2d grid. Passes the prior bounds as ``range=`` so tiny / under-converged
-    chains don't trigger corner.py's "no dynamic range" rejection.
+    hist2d grid. Range defaults to the posterior's own 99.5% quantile envelope
+    per axis (not the prior box) so tight posteriors aren't crushed by the
+    chosen prior bounds. Pass ``range=...`` to override.
     """
     import matplotlib.pyplot as plt
 
@@ -165,17 +166,31 @@ def plot_corner(fit, savepath=None, labels=None, **corner_kwargs):
     if labels is None:
         labels = list(fit.param_names)
 
+    # Per-axis range from the posterior's own 99.5 % quantile envelope,
+    # padded by 10 % of that span so the tails aren't clipped at the frame.
+    auto_range = []
+    for i in range(samples.shape[1]):
+        lo, hi = np.quantile(samples[:, i], [0.0025, 0.9975])
+        pad = 0.1 * (hi - lo) if hi > lo else max(abs(hi), 1.0) * 1e-3
+        auto_range.append((lo - pad, hi + pad))
+
     try:
         import corner
 
         kw = dict(
             labels=labels,
             show_titles=True,
-            title_fmt=".2f",
+            title_fmt=".3f",
             quantiles=[0.16, 0.5, 0.84],
+            bins=40,
+            smooth=1.0,
+            smooth1d=1.0,
+            plot_datapoints=True,
+            plot_density=True,
+            fill_contours=True,
         )
         if "range" not in corner_kwargs:
-            kw["range"] = [fit.bounds[name] for name in fit.param_names]
+            kw["range"] = auto_range
         kw.update(corner_kwargs)
         fig = corner.corner(samples, **kw)
     except ImportError:
@@ -185,9 +200,12 @@ def plot_corner(fit, savepath=None, labels=None, **corner_kwargs):
             for j in range(D):
                 ax = axes[i, j]
                 if i == j:
-                    ax.hist(samples[:, i], bins=40, histtype="step", color="k")
+                    ax.hist(samples[:, i], bins=40, range=auto_range[i],
+                            histtype="step", color="k")
                 elif j < i:
-                    ax.hist2d(samples[:, j], samples[:, i], bins=40, cmap="Greys")
+                    ax.hist2d(samples[:, j], samples[:, i], bins=40,
+                              range=[auto_range[j], auto_range[i]],
+                              cmap="Greys")
                 else:
                     ax.set_visible(False)
                 if i == D - 1:
@@ -487,6 +505,73 @@ def plot_bestfit_xrms(fit, theta=None, savepath=None, ax=None,
 # ---------------------------------------------------------------------------
 # Posterior neutrino-flux band
 # ---------------------------------------------------------------------------
+def _strip_units(x):
+    """Return ``x.value`` if x is an astropy Quantity, else x itself."""
+    return getattr(x, "value", x)
+
+
+def _overlay_neutrino_experiments(ax):
+    """Overlay IceCube 9y limit + future-experiment sensitivities + HESE
+    measurement on the neutrino-flux panel. Mirrors the experiments shown
+    in ``examples/evaluate.ipynb``'s ``plot_neutrinos``.
+    """
+    from prince_analysis_tools.spectra import (
+        IClimit9year_new,
+        GRAND10K_new,
+        GRAND200K_new,
+        POEMMA_new,
+        ARA_new,
+        ARIANNA_new,
+        HESE,
+    )
+
+    ic_e = _strip_units(IClimit9year_new["energy"])
+    ic_l = _strip_units(IClimit9year_new["limit"])
+    ax.fill_between(ic_e, ic_l, np.ones_like(ic_e),
+                    color="black", alpha=0.3)
+    ax.annotate("IceCube limit 9y", (4e7, 4e-8), fontsize="large")
+
+    g200_e = _strip_units(GRAND200K_new["energy"])
+    g200_l = _strip_units(GRAND200K_new["limit"])
+    ax.loglog(g200_e, g200_l, color="coral")
+    ax.annotate("GRAND 200k", (4e9, 7e-10), fontsize="large",
+                color="coral", rotation=40, rotation_mode="anchor")
+
+    g10_e = _strip_units(GRAND10K_new["energy"])
+    g10_l = _strip_units(GRAND10K_new["limit"])
+    ax.loglog(g10_e, g10_l, color="coral")
+    ax.annotate("GRAND 10k", (1.5e9, 1.7e-8), fontsize="large",
+                color="coral", rotation=44, rotation_mode="anchor")
+
+    po_e = _strip_units(POEMMA_new["energy"])
+    po_l = _strip_units(POEMMA_new["limit"])
+    ax.loglog(po_e, po_l, color="steelblue")
+    ax.annotate("POEMMA", (1e10, 3.2e-8), fontsize="large",
+                color="steelblue", rotation=40, rotation_mode="anchor")
+
+    ara_e = _strip_units(ARA_new["energy"])
+    ara_l = _strip_units(ARA_new["limit"])
+    ax.loglog(ara_e, ara_l, color="darkorange")
+    ax.annotate("ARA", (5.6e7, 1.1e-8), fontsize="large",
+                color="darkorange", rotation=-29, rotation_mode="anchor")
+
+    ari_e = _strip_units(ARIANNA_new["energy"])
+    ari_l = _strip_units(ARIANNA_new["limit"])
+    ax.loglog(ari_e, ari_l, color="seagreen")
+    ax.annotate("ARIANNA", (2.2e9, 1.3e-8), fontsize="large",
+                color="seagreen", rotation=17, rotation_mode="anchor")
+
+    h_e = _strip_units(HESE["energy"])
+    h_f = _strip_units(HESE["flux"])
+    h_le = _strip_units(HESE["lower_err"])
+    h_ue = _strip_units(HESE["upper_err"])
+    ax.errorbar(h_e, h_f, yerr=(h_le, h_ue), fmt="o", c="black")
+    ax.annotate("HESE", (3e5, 4e-8), fontsize="large",
+                color="black", rotation=0, rotation_mode="anchor")
+
+    return _strip_units(IClimit9year_new["energy"])[-1]
+
+
 def plot_posterior_neutrino_band(
     fit,
     n_samples=64,
@@ -495,9 +580,15 @@ def plot_posterior_neutrino_band(
     savepath=None,
     ax=None,
     rng_seed=0,
+    show_experiments=True,
 ):
     """Posterior neutrino flux band built from a random subsample of
-    equal-weight posterior points. Median + 68/95% bands."""
+    equal-weight posterior points. Median + 68/95% bands.
+
+    When ``show_experiments=True`` (default), overlays IceCube 9-yr limit,
+    GRAND 10K/200K, POEMMA, ARA, ARIANNA sensitivities, and HESE
+    measurement — matching the neutrino panel of ``evaluate.ipynb``.
+    """
     import matplotlib.pyplot as plt
 
     samples = fit.posterior_samples(equal_weight=True)
@@ -529,22 +620,23 @@ def plot_posterior_neutrino_band(
     ax.fill_between(nu_egrid, q[0], q[-1], color="C0", alpha=0.15, label="95%")
     ax.fill_between(nu_egrid, q[1], q[-2], color="C0", alpha=0.30, label="68%")
     ax.plot(nu_egrid, q[2], color="C0", lw=2, label="median")
+
+    xmax = 1e11
+    if show_experiments:
+        try:
+            ic_xmax = _overlay_neutrino_experiments(ax)
+            xmax = float(ic_xmax)
+        except Exception as exc:
+            print("[plot_posterior_neutrino_band] could not overlay experiments: {}".format(exc))
+
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlabel("E [GeV]")
-    ax.set_ylabel(r"$E^{{{}}} \Phi_\nu$".format(epow))
-    # Clip to the cosmogenic-neutrino window of interest — outside this
-    # range the propagated spectrum drops off precipitously.
-    ax.set_xlim(1e5, 1e11)
-    # Use the band's own dynamic range to set y; avoid the 1e-52 numerical
-    # underflow at the tail of the egrid swamping the plot.
-    band_q = q[2][(nu_egrid >= 1e5) & (nu_egrid <= 1e11)]
-    band_q = band_q[band_q > 0]
-    if band_q.size:
-        ymax = band_q.max() * 5
-        ymin = max(band_q.max() * 1e-6, 1e-20)
-        ax.set_ylim(ymin, ymax)
-    ax.legend(loc="best", fontsize=9)
+    ax.set_xlabel("E [GeV]", fontsize=14)
+    ax.set_ylabel(r"$E^{{{}}} \Phi_\nu$ [GeV cm$^{{-2}}$ s$^{{-1}}$ sr$^{{-1}}$]".format(epow),
+                  fontsize=14)
+    ax.set_xlim(1e5, xmax)
+    ax.set_ylim(1e-12, 1e-7)
+    ax.legend(loc="lower right", fontsize=12)
     ax.set_title("Posterior neutrino flux band (n={})".format(len(chosen)))
     fig.tight_layout()
 

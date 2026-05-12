@@ -411,9 +411,6 @@ def _build_auger2025():
     stat_low = to_e3j(_auger2025_tableV[3])
     sys_up = to_e3j(_auger2025_tableV[4])
     sys_low = to_e3j(_auger2025_tableV[5])
-    # Combined errors (stat ⊕ sys in quadrature, side-appropriate)
-    upper_err = np.sqrt(stat_up ** 2 + sys_up ** 2)
-    lower_err = np.sqrt(stat_low ** 2 + sys_low ** 2)
 
     # Symmetrise the upper-triangle correlation matrix.
     corr = _auger2025_corr_upper + _auger2025_corr_upper.T - np.eye(_auger2025_corr_upper.shape[0])
@@ -421,10 +418,14 @@ def _build_auger2025():
     return {
         "energy": energy_GeV,
         "spectrum": spec,
-        # Legacy combined errors (backwards-compatible with the diagonal
-        # chi² in UHECROptimizer.get_chi2_spectrum).
-        "upper_err": upper_err,
-        "lower_err": lower_err,
+        # Diagonal-chi² errors are STAT ONLY, matching auger2017's
+        # convention where the 14% energy-scale systematic is absorbed
+        # by the floating-deltaE inner-fit pull rather than by inflated
+        # per-bin sigmas. Stuffing sys into the diagonal here would
+        # double-count it with deltaE and silently weaken the spectrum
+        # constraint vs Xmax/RMS — the bug we hit in fixm2-nocorr.
+        "upper_err": stat_up,
+        "lower_err": stat_low,
         # Split errors (consumed by the opt-in correlation-aware chi²).
         "stat_up": stat_up,
         "stat_low": stat_low,

@@ -100,6 +100,17 @@ class UltraNestFit(object):
         spectrum bin-to-bin correlation matrix into the chi² (e.g. when
         running against the ``auger2025`` dict which carries a `corr`
         key derived from Table VI of PRL 135:241002).
+    apply_auger_xmax_shift : bool
+        **Opt-in Auger-2024 ΔXmax shift on the model ⟨Xmax⟩.** When True
+        (and ``xmax_model`` is one of {"epos","sibyll","qgsjet"}), each
+        inner iMinuit fit floats an extra nuisance ``auger_dxmax``
+        (g cm^-2) that shifts the predicted ⟨Xmax⟩ only (σ(Xmax) is
+        untouched). A per-HIM asymmetric-Gaussian prior centred on the
+        Table III measurement of PRD 109, 102001 (2024) — Sibyll-2.3d:
+        29 ⁺¹⁰⁻¹³, EPOS-LHC: 22 ⁺¹¹⁻¹⁴, QGSJet-II-04: 47 ⁺⁹⁻¹¹ g cm^-2
+        (combining stat ⊕ sys in quadrature on each side) — contributes
+        a Gaussian penalty to the χ². Default False reproduces the
+        pre-2026-05-12 fits exactly.
     initial_z, final_z, max_step
         Forwarded to the multi-RHS solver.
     """
@@ -118,6 +129,7 @@ class UltraNestFit(object):
         minimizer_args=None,
         spectrum_only=False,
         use_corr=False,
+        apply_auger_xmax_shift=False,
         sclass="auger",
         m_kind="simple",
         initial_z=1.0,
@@ -145,6 +157,7 @@ class UltraNestFit(object):
         )
         self.spectrum_only = spectrum_only
         self.use_corr = bool(use_corr)
+        self.apply_auger_xmax_shift = bool(apply_auger_xmax_shift)
         self.sclass = sclass
         self.m_kind = m_kind
         self.initial_z = initial_z
@@ -218,6 +231,7 @@ class UltraNestFit(object):
             ncoids=self.particle_ids,
             xmax_model=self.xmax_model,
             use_corr=self.use_corr,
+            apply_auger_xmax_shift=self.apply_auger_xmax_shift,
         )
         params = {"fix_deltaE": True, "fix_xmax_shift": True}
         params.update(self.minimizer_args)

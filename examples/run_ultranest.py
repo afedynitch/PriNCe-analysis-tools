@@ -63,6 +63,15 @@ def parse_args(argv=None):
         help="Hadronic interaction model for Xmax/RMS.",
     )
     p.add_argument(
+        "--apply-auger-xmax-shift",
+        action="store_true",
+        help=(
+            "Float a per-HIM ΔXmax nuisance with the Auger-2024 prior "
+            "(PRD 109, 102001 Table III) on the predicted ⟨Xmax⟩ — "
+            "model-side shift only, σ(Xmax) untouched."
+        ),
+    )
+    p.add_argument(
         "--n-nu-samples",
         type=int,
         default=64,
@@ -109,6 +118,7 @@ def main(argv=None):
         xmax=xm,
         xrms=xr,
         xmax_model=args.xmax_model,
+        apply_auger_xmax_shift=args.apply_auger_xmax_shift,
         minimizer_args={"fix_deltaE": False},
     )
 

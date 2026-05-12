@@ -121,6 +121,63 @@ class XmaxSimple(object):
     }
     QGSJetII04 = convert_to_namedtuple(QGSJetII04, name="QGSJetII04")
 
+    # Per-HIM ΔXmax shifts measured by the Pierre Auger Observatory in the
+    # energy range 10^18.5 to 10^19.0 eV using the 2D (S(1000), Xmax) hybrid
+    # template fit. Source: PRD 109, 102001 (2024) Table III — bibkey
+    # PierreAuger:2024neu. Values are in g cm^-2; stat and sys are
+    # asymmetric (up/low) per the published table.
+    #
+    # Keys correspond to the optimizer's ``xmax_model`` strings.
+    AUGER_2024_DXMAX = {
+        "epos": {
+            "model": "EPOS-LHC",
+            "central": 22.0,
+            "stat_up": 3.0,
+            "stat_low": 3.0,
+            "sys_up": 11.0,
+            "sys_low": 14.0,
+        },
+        "qgsjet": {
+            "model": "QGSJet-II-04",
+            "central": 47.0,
+            "stat_up": 2.0,
+            "stat_low": 1.0,
+            "sys_up": 9.0,
+            "sys_low": 11.0,
+        },
+        "sibyll": {
+            "model": "Sibyll-2.3d",
+            "central": 29.0,
+            "stat_up": 2.0,
+            "stat_low": 2.0,
+            "sys_up": 10.0,
+            "sys_low": 13.0,
+        },
+    }
+
+    @classmethod
+    def auger_2024_dxmax_prior(cls, xmax_model):
+        """Return the Auger-2024 ΔXmax prior for one HIM as
+        ``(central, sigma_up, sigma_low)`` in g cm^-2.
+
+        ``sigma_up`` / ``sigma_low`` are stat ⊕ sys in quadrature on each
+        side. Use these as the (asymmetric) Gaussian prior width on a
+        floated ``auger_dxmax`` nuisance parameter that shifts the model
+        ⟨Xmax⟩ — see :class:`UHECROptimizer`.
+        """
+        try:
+            p = cls.AUGER_2024_DXMAX[xmax_model]
+        except KeyError:
+            raise KeyError(
+                "No Auger-2024 ΔXmax measurement for xmax_model={!r}; "
+                "supported: {}".format(
+                    xmax_model, sorted(cls.AUGER_2024_DXMAX)
+                )
+            )
+        sigma_up = float(np.hypot(p["stat_up"], p["sys_up"]))
+        sigma_low = float(np.hypot(p["stat_low"], p["sys_low"]))
+        return float(p["central"]), sigma_up, sigma_low
+
     def __init__(self, model=None):
         if model is None:
             self.model = self.EPOSLHC

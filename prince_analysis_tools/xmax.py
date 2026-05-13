@@ -123,10 +123,11 @@ class XmaxSimple(object):
 
     # -------------------------------------------------------------
     # FLUKA-Xmax: XmaxSimple-form fit to Anatoli's per-species FLUKA
-    # shower simulations (10 data points: A in {1, 4, 14, 28, 56, 130,
-    # 208}, E in {5.6e18, 2.8e19, 5.6e19, 1.12e20} eV). Mean form is
-    # identical to EPOS-LHC / Sibyll-2.3d / QGSJet-II-04. Variance form
-    # differs:
+    # shower simulations. v3 dataset: 13 data points,
+    # A in {1, 4, 14, 28, 56, 130, 208},
+    # E in {5.6e18, 2.8e19, 5.6e19, 1.12e20} eV.
+    # Mean form is identical to EPOS-LHC / Sibyll-2.3d / QGSJet-II-04.
+    # Variance form differs:
     #
     #     sigma^2_proton(E) = exp( p0 + p1 * eps + p2 * eps^2 )
     #     eps = log10(E / E0),   E0 = 1e19 eV.
@@ -138,45 +139,65 @@ class XmaxSimple(object):
     # logE ~ 18.06 -- harmless for the chi^2 (which only evaluates at
     # data energies) but cosmetically broken in any plot extending
     # below the data range. The exp form fits the FLUKA data points
-    # identically (chi^2 = 4.45, RMS(d sigma) = 0.457 g/cm^2,
-    # max|d sigma| = 0.96 g/cm^2 -- bit-identical to the additive
-    # form) and gives smooth, physically reasonable extrapolation
-    # outside the FLUKA support.
+    # almost identically and gives smooth, physically reasonable
+    # extrapolation outside the FLUKA support.
     #
     # XmaxSimple.get_var_Xmax dispatches on the ``variance_form``
     # field below; other HIM namedtuples have no such field and fall
     # through getattr() to the legacy ``quadratic`` form.
     #
-    # Refit: UH-UHECR-Fluka-Prince/runs/2026-05-12_fluka-xmax-refit/.
+    # v3 refit: UH-UHECR-Fluka-Prince/runs/2026-05-13_fluka-xmax-fit-v3/.
+    # The variance fit uses 13 FLUKA data points + a 49-point
+    # HIM-consensus weak prior on sigma^2(Xmax). Prior grid:
+    # (logE, A) in {18.0, 18.5, ..., 21.0} x {1, 4, 14, 28, 56, 130,
+    # 208}; target = mean of XmaxSimple.{EPOSLHC, Sibyll23, QGSJetII04}
+    # sigma(Xmax) at each grid point; prior sigma = 10 g/cm^2 (same
+    # as v2 -- v2 reasoning still applies, and the 3 new low-E
+    # anchors just tighten the parameter errors without changing the
+    # qualitative landing). At this prior strength p2 lands near 0
+    # (+0.003), so sigma^2_p(E) is essentially monotonic in epsilon
+    # (no convexity, no significant bend-up at the high-E tail).
+    # min shape factor (1 + a*lnA + b*lnA^2) over (logE, A) in
+    # [18, 21] x [1, 208] is 0.064 -- strictly positive.
+    #
+    # The HIM-prior strength is a single tunable knob
+    # (SIGMA_PRIOR_G_PER_CM2 in the refit notebook). sigma -> infinity
+    # recovers the FLUKA-data-only fit; the 3 new low-E anchors are
+    # now enough to keep the shape factor positive everywhere, but
+    # the data-only sigma^2_p decreases monotonically with E (no
+    # convexity check from data alone). Loosening the prior beyond
+    # 10 g/cm^2 makes the high-E tail dive faster than the HIM
+    # consensus suggests; tightening below ~4 g/cm^2 makes
+    # sigma_p(E) artificially convex (overshooting HIM near
+    # logE = 21).
+    #
     # Authoritative notebook + raw FLUKA points live in
     # prince-fluka-utils/{notebooks/fit_fluka_xmax.ipynb,
     # data/fluka-xmax/}. Both should be kept in sync with this
     # parameter set when new FLUKA points land.
     # -------------------------------------------------------------
     FLUKA = {
-        "X0":    846.3044, # +-  2.4376  # g cm**-2
-        "D":      63.6063, # +-  3.3584  # g cm**-2
-        "xi":     -1.4201, # +-  2.0606  # g cm**-2
-        "delta":   0.8321, # +-  0.8593  # g cm**-2
+        "X0":    844.2677, # +-  0.8944  # g cm**-2
+        "D":      66.2888, # +-  1.3449  # g cm**-2
+        "xi":      0.1721, # +-  0.7714  # g cm**-2
+        "delta":   0.2556, # +-  0.3450  # g cm**-2
         # Variance: sigma^2_p(E) = exp(p0 + p1*eps + p2*eps^2).
-        # Fitted on the 10 FLUKA points ⊕ a 49-point HIM-consensus weak
-        # prior (sigma_prior = 10 g/cm^2; grid logE in {18.0..21.0} x
-        # A in {1,4,14,28,56,130,208}; HIM mean of EPOS-LHC /
-        # Sibyll-2.3d / QGSJet-II-04 sigma(Xmax)). The prior is loose
-        # enough that FLUKA stat errors dominate at the FLUKA data
-        # points (RMS(d sigma) = 0.58 g/cm^2, max|d sigma| = 1.45 -
-        # within stat) but bend the extrapolation tails up toward the
-        # HIM consensus where FLUKA is silent. Without the prior, the
-        # shape factor (1 + a(eps)*lnA + b*ln^2 A) goes negative for
-        # super-heavy A at logE > 20.2 (a^2/(4b) > 1), pushing the
-        # ^130Te / ^208Pb curves toward 0. With the prior the heavy-A
-        # tails stay at the HIM-mean band.
-        "p0":      7.9720, # +-  0.0605  # log(g**2 cm**-4)
-        "p1":     -0.1199, # +-  0.1165
-        "p2":     -0.0427, # +-  0.0624
-        "a0":     -0.3358, # +-  0.0049
-        "a1":     -0.0028, # +-  0.0035
-        "b":       0.0303, # +-  0.0009
+        # Joint fit on 13 FLUKA points + 49-point HIM-consensus prior
+        # (sigma_prior = 10 g/cm^2 -- see comment block above). Fit
+        # quality on the 13 FLUKA points only: chi^2(sigma^2) = 18.3
+        # (dof_data = 7), RMS Delta sigma = 0.88 g/cm^2, max
+        # |Delta sigma| = 1.91 g/cm^2 -- all per-point residuals
+        # within FLUKA stat. Mean fit (X0..delta) is FLUKA-only (no
+        # prior on the mean): chi^2_mean = 38.4 (dof = 9), RMS Delta
+        # <X> = 2.08 g/cm^2, max |Delta <X>| = 4.34 g/cm^2 --
+        # XmaxSimple's linear-in-lnA form is the bottleneck once A
+        # coverage spans {1, 4, 56, 208} at fixed logE.
+        "p0":      8.0451, # +-  0.0243  # log(g**2 cm**-4)
+        "p1":     -0.2608, # +-  0.0478
+        "p2":      0.0034, # +-  0.0492  -- ~0: sigma^2_p ~ flat in eps
+        "a0":     -0.3385, # +-  0.0037
+        "a1":      0.0014, # +-  0.0011
+        "b":       0.0303, # +-  0.0007
         "E0":      1e10,   # GeV  (== 10^19 eV)
         "variance_form": "expquad",
     }

@@ -53,12 +53,14 @@ def main(argv=None):
                     help="Subsample size for the posterior neutrino-flux band.")
     ap.add_argument("--n-band", type=int, default=0,
                     help="Posterior band size on spectrum/Xmax/RMS curves (0 = MAP only).")
-    ap.add_argument("--dataset", default="2017", choices=("2015", "2017", "2019", "2025"),
+    ap.add_argument("--dataset", default="2017", choices=("2015", "2017", "2019", "2025", "2026FD"),
                     help="Auger data vintage. 2025 enables the new spectrum + Xmax/RMS "
-                         "from PierreAuger:2025eun and PierreAuger:2024nzw.")
+                         "from PierreAuger:2025eun and PierreAuger:2024nzw. 2026FD pairs the "
+                         "2025 combined spectrum with the new 17-year FD Xmax/σ from "
+                         "PierreAuger:2026qbt (arXiv:2605.12598).")
     ap.add_argument("--use-corr", action="store_true",
                     help="Fold the spectrum bin-to-bin correlation matrix into the χ² "
-                         "(only meaningful with --dataset 2025).")
+                         "(only meaningful with --dataset 2025 or 2026FD).")
     args = ap.parse_args(argv)
 
     print("[smoke] loading pickle: {}".format(args.pickle), flush=True)
@@ -68,7 +70,14 @@ def main(argv=None):
     print("[smoke]   loaded in {:.1f}s, dim_states={}".format(
         time.time() - t0, prince_run.dim_states), flush=True)
 
-    if args.dataset == "2025":
+    if args.dataset == "2026FD":
+        # Pair the 2025 combined spectrum (PierreAuger:2025eun) with the new
+        # 17-year FD Xmax/σ (PierreAuger:2026qbt) — the 2026 paper does not
+        # release a spectrum dataset of its own.
+        from prince_analysis_tools.spectra import auger2025 as spec_d
+        from prince_analysis_tools.spectra import Xmax2026FD as xm_d
+        from prince_analysis_tools.spectra import XRMS2026FD as xr_d
+    elif args.dataset == "2025":
         from prince_analysis_tools.spectra import auger2025 as spec_d
         from prince_analysis_tools.spectra import Xmax2025 as xm_d
         from prince_analysis_tools.spectra import XRMS2025 as xr_d

@@ -34,7 +34,7 @@ def parse_args(argv=None):
     p.add_argument("--species", default="auto",
                    help="'auto' for the standard 5-species set (if present in pickle), "
                         "or comma-separated PDG IDs.")
-    p.add_argument("--dataset", choices=("2015", "2017", "2019", "2025"), default="2017")
+    p.add_argument("--dataset", choices=("2015", "2017", "2019", "2025", "2026FD"), default="2017")
     p.add_argument("--xmax-model", default="sibyll")
     p.add_argument("--nu-samples", type=int, default=16)
     p.add_argument("--n-band", type=int, default=0,
@@ -60,6 +60,9 @@ def main(argv=None):
         from prince_analysis_tools.spectra import auger2019 as spec, Xmax2019 as xm, XRMS2019 as xr
     elif args.dataset == "2025":
         from prince_analysis_tools.spectra import auger2025 as spec, Xmax2025 as xm, XRMS2025 as xr
+    elif args.dataset == "2026FD":
+        from prince_analysis_tools.spectra import auger2025 as spec
+        from prince_analysis_tools.spectra import Xmax2026FD as xm, XRMS2026FD as xr
 
     if args.species == "auto":
         five = (2212, 1000020040, 1000070140, 1000140280, 1000260560)

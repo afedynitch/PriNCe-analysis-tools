@@ -493,6 +493,83 @@ def _build_xmax2025_dicts():
 Xmax2025, XRMS2025 = _build_xmax2025_dicts()
 
 
+# ==================================================================
+# Pierre Auger 2026 — 17-year FD ⟨Xmax⟩ / σ(Xmax)
+# (PierreAuger:2026qbt, arXiv:2605.12598)
+# ------------------------------------------------------------------
+# Per-bin Xmax moments from the 17-year (2004 Dec 1 → 2021 Dec 31)
+# Auger FD hybrid analysis. Exposure is 2.4× the FD-2014 result
+# (which Xmax2017 partly tracks). 20 bins of Δlog₁₀(E/eV) = 0.1
+# from 17.7 to 19.6, plus an integral bin > 19.6 (centre 19.71).
+#
+# Columns of `_auger2026FD_table`:
+#   log10E_low, log10E_high, log10E_center, N_events,
+#   ⟨Xmax⟩, stat, sys_up, sys_low,
+#   σ(Xmax),  stat, sys_up, sys_low                  (g cm⁻²)
+#
+# sys_up / sys_low are the asymmetric energy-dependent systematic
+# magnitudes (both positive). Source: xmaxMomentsTable.tex from the
+# arXiv source bundle, mirrored in
+# raw/lit/pierreauger-2026qbt/xmaxMomentsTable.tex.
+# Integral bin upper edge encoded as 20.0 (nominal); see lit-note
+# for the caveat.
+# ==================================================================
+_auger2026FD_table = np.array(
+    [
+        [17.7, 17.8, 17.75, 9865, 703.1, 0.7,  8.1, 10.2, 57.4, 0.9, 1.7, 1.6],
+        [17.8, 17.9, 17.85, 9702, 711.5, 0.8,  7.9, 10.2, 59.3, 1.0, 1.9, 1.7],
+        [17.9, 18.0, 17.95, 8632, 719.7, 0.8,  7.8, 10.2, 60.6, 1.1, 2.0, 1.8],
+        [18.0, 18.1, 18.05, 7219, 728.7, 1.0,  7.6, 10.2, 62.1, 1.2, 2.2, 1.9],
+        [18.1, 18.2, 18.15, 5836, 737.9, 1.0,  7.5, 10.1, 61.0, 1.3, 2.4, 2.1],
+        [18.2, 18.3, 18.25, 4432, 743.9, 1.1,  7.4,  9.9, 59.3, 1.4, 2.6, 2.2],
+        [18.3, 18.4, 18.35, 3450, 750.4, 1.1,  7.2,  9.7, 58.0, 1.5, 2.3, 2.0],
+        [18.4, 18.5, 18.45, 2574, 757.3, 1.4,  7.1,  9.4, 56.0, 1.9, 2.1, 1.8],
+        [18.5, 18.6, 18.55, 1846, 758.9, 1.4,  7.0,  9.1, 53.6, 1.8, 1.9, 1.7],
+        [18.6, 18.7, 18.65, 1310, 764.4, 1.8,  7.0,  8.8, 57.7, 2.4, 1.7, 1.5],
+        [18.7, 18.8, 18.75,  961, 762.2, 1.6,  6.9,  8.4, 45.3, 2.0, 1.5, 1.5],
+        [18.8, 18.9, 18.85,  752, 766.2, 1.9,  6.9,  8.1, 44.4, 2.2, 1.4, 1.4],
+        [18.9, 19.0, 18.95,  554, 770.0, 2.0,  6.9,  7.8, 38.5, 2.4, 1.4, 1.4],
+        [19.0, 19.1, 19.05,  449, 774.8, 2.2,  6.9,  7.5, 42.6, 2.8, 1.3, 1.3],
+        [19.1, 19.2, 19.15,  317, 773.7, 2.1,  6.9,  7.3, 32.9, 2.6, 1.3, 1.4],
+        [19.2, 19.3, 19.25,  183, 780.7, 3.4,  7.0,  7.2, 42.7, 4.7, 1.3, 1.3],
+        [19.3, 19.4, 19.35,  163, 780.8, 3.1,  7.0,  7.0, 36.5, 4.1, 1.3, 1.4],
+        [19.4, 19.5, 19.44,  100, 780.2, 4.3,  7.1,  7.0, 37.2, 5.1, 1.3, 1.5],
+        [19.5, 19.6, 19.55,   53, 791.9, 5.1,  7.1,  6.9, 36.2, 6.4, 1.4, 1.5],
+        # Integral bin [19.6, ∞); upper edge encoded as 20.0 nominal.
+        [19.6, 20.0, 19.71,   55, 784.6, 4.2,  7.2,  6.9, 29.0, 4.0, 1.6, 1.7],
+    ]
+).T
+
+
+def _build_xmax2026FD_dicts():
+    t = _auger2026FD_table
+    lo = (10 ** t[0] * u.eV).to_value(u.GeV)
+    hi = (10 ** t[1] * u.eV).to_value(u.GeV)
+    centre = (10 ** t[2] * u.eV).to_value(u.GeV)
+    xmax = {
+        "energy": centre,
+        "energy_Low": centre - lo,
+        "energy_Up": hi - centre,
+        "val": t[4],
+        "stat": t[5],
+        "sys_Up": t[6],
+        "sys_Low": t[7],
+    }
+    xrms = {
+        "energy": centre,
+        "energy_Low": centre - lo,
+        "energy_Up": hi - centre,
+        "val": t[8],
+        "stat": t[9],
+        "sys_Up": t[10],
+        "sys_Low": t[11],
+    }
+    return xmax, xrms
+
+
+Xmax2026FD, XRMS2026FD = _build_xmax2026FD_dicts()
+
+
 # ------------------------------------------------------------------
 # TA spectrum from ICRC 2015 (combined spectrum)
 # ------------------------------------------------------------------

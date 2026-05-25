@@ -415,6 +415,32 @@ def _build_auger2025():
     # Symmetrise the upper-triangle correlation matrix.
     corr = _auger2025_corr_upper + _auger2025_corr_upper.T - np.eye(_auger2025_corr_upper.shape[0])
 
+    # ------------------------------------------------------------------
+    # Residual sys correlation matrix (energy-scale mode removed).
+    #
+    # The Table VI correlation matrix is **dominated by the 14% energy-
+    # scale systematic** (97.94% of the trace of C_sys = sys·sys·corr is
+    # in the top eigenmode — verified numerically by inspecting the
+    # eigenvalues of (sys_sym·sys_sym·corr) at construction time). A
+    # corr-aware chi² that uses this full C_sys while *also* floating a
+    # deltaE nuisance double-counts the energy-scale piece.
+    #
+    # We pre-compute a "residual" correlation matrix that keeps every
+    # eigenmode *except* the dominant one. Consumers that float deltaE
+    # should use `corr_residual` (via `cov_alternate=...` on the chi²
+    # call); consumers that hold deltaE=0 fixed can keep using `corr`.
+    # ------------------------------------------------------------------
+    sys_sym = 0.5 * (sys_up + sys_low)
+    C_full = (sys_sym[:, None] * sys_sym[None, :]) * corr
+    eig_w, eig_V = np.linalg.eigh(C_full)
+    # Drop the largest-eigenvalue mode (energy-scale direction)
+    C_residual = (eig_V[:, :-1] * eig_w[:-1]) @ eig_V[:, :-1].T
+    # Convert back to a correlation matrix (residual_corr = C_res / (s_i s_j))
+    # using the residual diagonal as the new sigma scale.
+    sigma_residual = np.sqrt(np.clip(np.diag(C_residual), 0.0, None))
+    sigma_residual_safe = np.where(sigma_residual > 0, sigma_residual, 1.0)
+    corr_residual = C_residual / (sigma_residual_safe[:, None] * sigma_residual_safe[None, :])
+
     return {
         "energy": energy_GeV,
         "spectrum": spec,
@@ -431,9 +457,21 @@ def _build_auger2025():
         "stat_low": stat_low,
         "sys_Up": sys_up,
         "sys_Low": sys_low,
-        # Bin-to-bin correlation matrix from Table VI; same ordering
+        # Full bin-to-bin correlation matrix from Table VI; same ordering
         # as `energy`. Dominated by the 14% energy-scale systematic.
         "corr": corr,
+        # Residual-only correlation + per-bin sigma (top eigenmode of
+        # C_sys removed). For fits that float deltaE — avoids the
+        # energy-scale double-counting. Consume via:
+        #   sys_residual = data['sigma_sys_residual']
+        #   corr_residual = data['corr_residual']
+        # Then build the covariance the same way the full chi² does, but
+        # with these replacements: C = (sys_res ⊗ sys_res) · corr_res +
+        # diag(stat²).
+        "corr_residual": corr_residual,
+        "sigma_sys_residual": sigma_residual,
+        # Diagnostic: fraction of original sys-covariance trace dropped.
+        "sys_residual_fraction": float((C_full.trace() - C_residual.trace()) / C_full.trace()),
     }
 
 

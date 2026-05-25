@@ -45,16 +45,36 @@ _XMAX_REFS = [
 # Helpers
 # ---------------------------------------------------------------------------
 def _combined_result(fit, theta):
-    """Re-run forward model + inner fit at ``theta``; build the linear-
-    combination :class:`UHECRPropagationResult` and pull the nuisance params.
+    """Re-run forward model + nuisance fit at ``theta``.
+
+    Polymorphic — dispatches on the fit class via the ``minres`` slot:
+
+      - :class:`UltraNestFit` (iMinuit-inner pipeline): ``minres`` is the
+        iMinuit ``Minuit`` object; ``norms`` are the per-species absolute
+        norms it returned; ``combined`` is the linear combination
+        ``Σ_i norms_i · lst_res_i``.
+
+      - :class:`UltraNestFractionsFit` (no inner fit): ``minres`` is
+        ``None``; ``norms`` is the pseudo-vector ``N_star · fractions``;
+        ``combined`` is the single multi-species propagation scaled by
+        the closed-form ``N_star``.
 
     Returns ``(combined_result, deltaE, xshift, norms, minres, optimizer)``.
     """
     minres, opt = fit.recompute_fit(theta)
+    if minres is None:
+        # Fractions pipeline — nuisances stashed on opt by recompute_fit.
+        deltaE = float(opt._inferred_deltaE)
+        xshift = float(getattr(opt, "_inferred_xmax_shift", 0.0))
+        N_star = float(opt._inferred_N_star)
+        fractions = np.asarray(opt._inferred_fractions, dtype=float)
+        combined = opt.lst_res[0] * N_star
+        norms = N_star * fractions
+        return combined, deltaE, xshift, norms, minres, opt
+    # iMinuit pipeline (existing behavior preserved).
     deltaE = float(minres.values["deltaE"]) if "deltaE" in minres.parameters else 0.0
     xshift = float(minres.values["xmax_shift"]) if "xmax_shift" in minres.parameters else 0.0
     norms = np.array([float(minres.values["norm{}".format(p)]) for p in fit.particle_ids])
-
     combined = opt.lst_res[0] * float(norms[0])
     for r, n in zip(opt.lst_res[1:], norms[1:]):
         combined = combined + r * float(n)
@@ -62,16 +82,27 @@ def _combined_result(fit, theta):
 
 
 def _combined_result_batch(fit, theta_array):
-    """Batched forward model + inner fit on a stack of ``theta`` points.
+    """Batched version of :func:`_combined_result`.
 
-    Packs all forward solves into a single ``MultiRHSPropagationSolverETD2``
-    call (K = N_θ × N_species), then loops the inner iMinuit fit. The
-    multi-RHS bench at K=32 is the sweet spot but K up to ~200 is still
-    fine (`runs/2026-05-11_multi-rhs-bench-mac/`).
+    Polymorphic — uses :meth:`UltraNestFractionsFit.recompute_fit_batch`
+    when available (one combined-source RHS per theta), else falls back
+    to the iMinuit pipeline's per-species multi-RHS solve + per-theta
+    inner fit.
 
     Yields ``(combined_result, deltaE, xshift, norms, minres, opt)`` per
     input theta, in the same order.
     """
+    if hasattr(fit, "recompute_fit_batch"):
+        for minres, opt in fit.recompute_fit_batch(theta_array):
+            deltaE = float(opt._inferred_deltaE)
+            xshift = float(getattr(opt, "_inferred_xmax_shift", 0.0))
+            N_star = float(opt._inferred_N_star)
+            fractions = np.asarray(opt._inferred_fractions, dtype=float)
+            combined = opt.lst_res[0] * N_star
+            norms = N_star * fractions
+            yield combined, deltaE, xshift, norms, minres, opt
+        return
+    # iMinuit pipeline (existing behavior preserved).
     batch_params = [fit._theta_row_to_params(theta) for theta in theta_array]
     results_per_live = fit.walker.compute_models_batch(
         fit.particle_ids,
@@ -384,7 +415,7 @@ def _xmax_panel(fit, theta, kind, savepath, ax, figsize, data_label,
     combined, deltaE, xshift, _norms, _minres, _opt = _combined_result(fit, theta)
     dxmax = (
         float(_minres.values["auger_dxmax"])
-        if "auger_dxmax" in _minres.parameters else 0.0
+        if (_minres is not None and "auger_dxmax" in _minres.parameters) else 0.0
     )
     model = _build_xmax_model(fit.xmax_model)
 
@@ -433,7 +464,7 @@ def _xmax_panel(fit, theta, kind, savepath, ax, figsize, data_label,
         for combined_i, deltaE_i, _, _, minres_i, _ in _combined_result_batch(fit, chosen):
             dxmax_i = (
                 float(minres_i.values["auger_dxmax"])
-                if "auger_dxmax" in minres_i.parameters else 0.0
+                if (minres_i is not None and "auger_dxmax" in minres_i.parameters) else 0.0
             )
             e_i, y_i = curve_for(combined_i, deltaE_i, dxmax_i)
             curves.append(np.interp(e_map, e_i, y_i,
@@ -453,10 +484,16 @@ def _xmax_panel(fit, theta, kind, savepath, ax, figsize, data_label,
     yerr = np.array((data["sys_Low"], data["sys_Up"]))
     _make_error_boxes(ax, data["energy"], data["val"], xerr, yerr, facecolor="gray")
 
+    # χ² uses: delta = model − val + xshift·sys, i.e. the effective data
+    # value is val − xshift·sys (data shifted DOWN by xshift·sys when
+    # xshift > 0). The data points on the plot should land where the χ²
+    # places them, so the correction is **−xshift·sys** (sign flip from
+    # an earlier draft that had it as +xshift·sys — latent in bigK-prod
+    # because xmax_shift was fixed at 0 there).
     if xshift > 0:
-        xcorr = xshift * data["sys_Up"]
+        xcorr = -xshift * data["sys_Up"]
     else:
-        xcorr = xshift * data["sys_Low"]
+        xcorr = -xshift * data["sys_Low"]
     ax.errorbar(
         data["energy"], data["val"] + xcorr,
         xerr=(data["energy_Low"], data["energy_Up"]),
@@ -479,7 +516,7 @@ def _xmax_panel(fit, theta, kind, savepath, ax, figsize, data_label,
         r"$\Delta_E={:+.3f}$".format(deltaE),
         r"$\Delta_{{X}}={:+.2f}$".format(xshift),
     ]
-    if kind == "mean" and "auger_dxmax" in _minres.parameters:
+    if kind == "mean" and _minres is not None and "auger_dxmax" in _minres.parameters:
         title_bits.append(r"$\Delta_{{\rm dx}}={:+.2f}$".format(dxmax))
     if n_band > 0:
         title_bits.append(r"$n_{{\rm band}}={}$".format(n_band))

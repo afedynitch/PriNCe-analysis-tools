@@ -16,6 +16,7 @@ class UHECROptimizer(object):
         use_corr=False,
         corr_jitter=1e-3,
         apply_auger_xmax_shift=False,
+        use_corr_residual=False,
     ):
         """Per-cell χ² + iMinuit inner fit for UHECR source-parameter scans.
 
@@ -115,6 +116,9 @@ class UHECROptimizer(object):
         # statics covariance scaffold so the hot path in fit_data_minuit
         # only does a small linear solve per evaluation.
         self.use_corr = bool(use_corr) and "corr" in spectrum
+        self.use_corr_residual = bool(use_corr_residual) and self.use_corr and (
+            "corr_residual" in spectrum and "sigma_sys_residual" in spectrum
+        )
         self._corr_solver = None
         if self.use_corr:
             sl = np.flatnonzero(self.egrid_spectrum > self.Emin)
@@ -132,6 +136,25 @@ class UHECROptimizer(object):
             self._corr_sub.flat[:: self._corr_sub.shape[0] + 1] += corr_jitter
             self._corr_indices = sl
             self._corr_jitter = corr_jitter
+
+            if self.use_corr_residual:
+                # Pre-build the *residual* sys covariance for the Emin slice.
+                # Built from the dropped-top-eigenmode corr matrix +
+                # symmetric residual sigma published on the data dict.
+                # Replaces the full asymmetric sys path in
+                # ``_get_chi2_spectrum_corr`` when this flag is on.
+                corr_res = np.asarray(spectrum["corr_residual"], dtype=float)
+                sigma_res = np.asarray(spectrum["sigma_sys_residual"], dtype=float)
+                if corr_res.shape != corr.shape or sigma_res.size != corr.shape[0]:
+                    raise ValueError(
+                        "corr_residual / sigma_sys_residual shape mismatch with corr"
+                    )
+                sigma_sub = sigma_res[sl]
+                cov_res_sub = (sigma_sub[:, None] * sigma_sub[None, :]) * corr_res[np.ix_(sl, sl)]
+                # The corr_residual matrix can carry tiny negative-eigenvalue
+                # noise from the OCR-rounded input; jitter the diagonal too.
+                cov_res_sub.flat[:: cov_res_sub.shape[0] + 1] += corr_jitter
+                self._cov_residual_sub = cov_res_sub
 
         self._create_interpolators()
         self.compute_combined_result(norms)
@@ -240,6 +263,11 @@ class UHECROptimizer(object):
         The correlation matrix's diagonal carries a small jitter
         (``corr_jitter``) to defend against the OCR-rounded inputs not
         being strictly positive-definite.
+
+        If ``use_corr_residual`` was set at construction, the sys ⊗ corr
+        block is replaced by the pre-cached residual covariance
+        (top energy-scale eigenmode dropped) — meant for fits that float
+        ``deltaE`` and therefore already model the energy-scale piece.
         """
         sl = self._corr_indices
         delta = self.res_spectrum[sl] - self.spectrum["spectrum"][sl]
@@ -252,14 +280,21 @@ class UHECROptimizer(object):
             # as stat and zero out sys to recover the diagonal χ² when no split is
             # available.
             stat = np.where(model_above, spec["upper_err"][sl], spec["lower_err"][sl])
-        if "sys_Up" in spec and "sys_Low" in spec:
-            sys_ = np.where(model_above, spec["sys_Up"][sl], spec["sys_Low"][sl])
-        else:
-            sys_ = np.zeros_like(stat)
 
-        # Covariance: diagonal stat² + outer-product sys correlated by `corr`.
-        cov = (sys_[:, None] * sys_[None, :]) * self._corr_sub
-        cov.flat[:: cov.shape[0] + 1] += stat ** 2
+        if self.use_corr_residual:
+            # Residual sys covariance pre-computed at construction; stat
+            # added on the diagonal here so the sign-asymmetric stat
+            # convention is preserved.
+            cov = self._cov_residual_sub.copy()
+            cov.flat[:: cov.shape[0] + 1] += stat ** 2
+        else:
+            if "sys_Up" in spec and "sys_Low" in spec:
+                sys_ = np.where(model_above, spec["sys_Up"][sl], spec["sys_Low"][sl])
+            else:
+                sys_ = np.zeros_like(stat)
+            # Covariance: diagonal stat² + outer-product sys correlated by `corr`.
+            cov = (sys_[:, None] * sys_[None, :]) * self._corr_sub
+            cov.flat[:: cov.shape[0] + 1] += stat ** 2
         # Solve C x = Δ via cholesky (cov is positive-definite up to OCR-rounded jitter).
         from scipy.linalg import cho_factor, cho_solve
 

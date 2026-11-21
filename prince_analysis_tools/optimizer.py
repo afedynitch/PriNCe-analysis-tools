@@ -556,18 +556,17 @@ class UHECRWalker(object):
         """
         Compute the results corresponding to source_params for each particle id individually and return a list
         """
-        from prince.solvers import UHECRPropagationSolverBDF
-        from prince.cr_sources import AugerFitSource, SimpleSource, RigidityFlexSource
+        from prince_ultra.solvers import UHECRPropagationSolverETD2
+        from prince_ultra.cr_sources import AugerFitSource, SimpleSource, RigidityFlexSource
 
         lst_models = []
         for ncoid in particle_ids:
 
-            solver = UHECRPropagationSolverBDF(
+            solver = UHECRPropagationSolverETD2(
                 initial_z=initial_z,
                 final_z=final_z,
                 prince_run=self.prince_run,
                 enable_partial_diff_jacobian=True,
-                atol=atol,
             )
 
             if sclass == "auger":
@@ -591,12 +590,7 @@ class UHECRWalker(object):
                 raise Exception("Unknown source class: {:}".format(sclass))
             solver.add_source_class(source)
             # solver.set_initial_condition()
-            solver.solve(
-                dz=max_step,
-                verbose=False,
-                full_reset=False,
-                progressbar=self.progressbar,
-            )
+            solver.solve(dz=max_step, verbose=False, progressbar=self.progressbar)
 
             lst_models.append(solver.res)
 

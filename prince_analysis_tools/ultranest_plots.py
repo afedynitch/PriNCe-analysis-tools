@@ -147,7 +147,7 @@ def _data_stat_sys(data):
 def _mass_group_select(amin, amax):
     """Build the (selector, vmin, vmax) tuple that PriNCe's
     ``get_solution_group`` understands for a mass range."""
-    from prince_cr.util import get_AZN
+    from prince_ultra.util import get_AZN
     return (lambda pid: get_AZN(pid)[0], int(amin), int(amax))
 
 

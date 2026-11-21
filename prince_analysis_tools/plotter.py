@@ -125,7 +125,7 @@ class ScanPlotter(object):
             {"egrid": self.egrid, "known_spec": self.known_spec, "state": state}
             for state in states
         ]
-        from prince.solvers import UHECRPropagationResult
+        from prince_ultra.solvers import UHECRPropagationResult
 
         results = [UHECRPropagationResult.from_dict(d) for d in dicts]
         return results
@@ -185,7 +185,7 @@ class ScanPlotter(object):
         for s, f in zip(spec, fractions):
             params[s] = (gamma, Rcut, f)
 
-        from prince.cr_sources import AugerFitSource
+        from prince_ultra.cr_sources import AugerFitSource
 
         source = AugerFitSource(prince_run, params=params, m=float(m), norm=norm)
 

@@ -10,7 +10,8 @@ The majority of the code consists of pure Python modules.
 
 Dependencies (list might be incomplete):
 
-- [*PriNCe* propagation code](https://github.com/joheinze/PriNCe)
+- Prince Ultra (`prince_ultra`, successor of the [*PriNCe* propagation code](https://github.com/joheinze/PriNCe));
+  this fork no longer imports `prince` / `prince_cr`
 - python-3.7 or later
 - numpy
 - scipy

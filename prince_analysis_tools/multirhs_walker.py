@@ -1,8 +1,9 @@
-"""Forward-model wrapper that drives PriNCe's multi-RHS ETD2 solver.
+"""Forward-model wrapper that drives Prince Ultra's multi-RHS solvers.
 
 `MultiRHSWalker.compute_models_batch` packs ``K_live × N_species`` independent
-propagation problems into a single :class:`MultiRHSPropagationSolverETD2`
-solve, then hands back a per-livepoint list of detached
+propagation problems into a single multi-RHS solve
+(:class:`MultiRHSPropagationSolverETD2` or the block-implicit
+:class:`MultiRHSBlockImplicitEulerSolver`), then hands back a per-livepoint list of detached
 :class:`UHECRPropagationResult` objects that the existing
 :class:`UHECROptimizer` consumes unchanged.
 
@@ -14,20 +15,41 @@ as ``k = j * N_species + i`` (j = live-point index, i = species index).
 
 import numpy as np
 
+SOLVERS = ("etd2", "trbdf2", "be")
+
+
+def _multirhs_solver(solver, **kwargs):
+    """Multi-RHS solver instance for ``solver`` in :data:`SOLVERS`."""
+    from prince_ultra.solvers import (
+        MultiRHSBlockImplicitEulerSolver,
+        MultiRHSPropagationSolverETD2,
+    )
+
+    if solver == "etd2":
+        return MultiRHSPropagationSolverETD2(**kwargs)
+    if solver in ("trbdf2", "be"):
+        return MultiRHSBlockImplicitEulerSolver(scheme=solver, **kwargs)
+    raise ValueError("solver must be one of {}, got {!r}".format(SOLVERS, solver))
+
 
 class MultiRHSWalker(object):
-    """Batched forward-model wrapper backed by ``MultiRHSPropagationSolverETD2``.
+    """Batched forward-model wrapper backed by a Prince Ultra multi-RHS solver.
 
     Constructor mirrors :class:`UHECRWalker` so the same data fixtures
-    (spectrum, Xmax, XRMS) can be reused.
+    (spectrum, Xmax, XRMS) can be reused. ``solver`` selects the integrator:
+    ``"etd2"`` (default; GPU with the CUPY backend), ``"trbdf2"`` or ``"be"``
+    (block-implicit sweep on the CPU).
     """
 
-    def __init__(self, prince_run, spectrum, xmax, xrms, progressbar=False):
+    def __init__(self, prince_run, spectrum, xmax, xrms, progressbar=False, solver="etd2"):
+        if solver not in SOLVERS:
+            raise ValueError("solver must be one of {}, got {!r}".format(SOLVERS, solver))
         self.prince_run = prince_run
         self.spectrum = spectrum
         self.xmax = xmax
         self.xrms = xrms
         self.progressbar = progressbar
+        self.solver = solver
 
     def compute_models_batch(
         self,
@@ -64,11 +86,8 @@ class MultiRHSWalker(object):
             of ``len(particle_ids)`` detached results (state arrays copied out
             of the multi-RHS column views so the caller can safely re-solve).
         """
-        from prince_cr.solvers import (
-            MultiRHSPropagationSolverETD2,
-            UHECRPropagationResult,
-        )
-        from prince_cr.cr_sources import (
+        from prince_ultra.solvers import UHECRPropagationResult
+        from prince_ultra.cr_sources import (
             AugerFitSource,
             SimpleSource,
             RigidityFlexSource,
@@ -78,7 +97,8 @@ class MultiRHSWalker(object):
         K_live = len(batch_params)
         K_total = K_live * N_species
 
-        solver = MultiRHSPropagationSolverETD2(
+        solver = _multirhs_solver(
+            self.solver,
             initial_z=initial_z,
             final_z=final_z,
             prince_run=self.prince_run,
@@ -175,11 +195,8 @@ class MultiRHSWalker(object):
             One detached result per live point, representing the
             propagated CR ensemble injected as the species mixture.
         """
-        from prince_cr.solvers import (
-            MultiRHSPropagationSolverETD2,
-            UHECRPropagationResult,
-        )
-        from prince_cr.cr_sources import (
+        from prince_ultra.solvers import UHECRPropagationResult
+        from prince_ultra.cr_sources import (
             AugerFitSource,
             SechCutoffSource,
             SimpleSource,
@@ -189,7 +206,8 @@ class MultiRHSWalker(object):
         N_species = len(particle_ids)
         K_live = len(batch_params)
 
-        solver = MultiRHSPropagationSolverETD2(
+        solver = _multirhs_solver(
+            self.solver,
             initial_z=initial_z,
             final_z=final_z,
             prince_run=self.prince_run,

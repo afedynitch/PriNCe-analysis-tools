@@ -113,6 +113,8 @@ class UltraNestFit(object):
         pre-2026-05-12 fits exactly.
     initial_z, final_z, max_step
         Forwarded to the multi-RHS solver.
+    solver : {"etd2", "trbdf2", "be"}
+        Integrator of the forward model (see :class:`MultiRHSWalker`).
     """
 
     def __init__(
@@ -135,6 +137,7 @@ class UltraNestFit(object):
         initial_z=1.0,
         final_z=0.0,
         max_step=1e-2,
+        solver="etd2",
     ):
         self.prince_run = prince_run
         self.spectrum = spectrum
@@ -164,7 +167,9 @@ class UltraNestFit(object):
         self.final_z = final_z
         self.max_step = max_step
 
-        self.walker = MultiRHSWalker(prince_run, spectrum, xmax, xrms, progressbar=False)
+        self.walker = MultiRHSWalker(
+            prince_run, spectrum, xmax, xrms, progressbar=False, solver=solver
+        )
         self.sampler = None
         self.result = None
         # Diagnostics — counters incremented across loglike calls.
@@ -910,7 +915,7 @@ class UltraNestFractionsFit(object):
     Parameters
     ----------
     prince_run, spectrum, xmax, xrms, particle_ids, xmax_model, Emin,
-    use_corr, sclass, m_kind, initial_z, final_z, max_step
+    use_corr, sclass, m_kind, initial_z, final_z, max_step, solver
         Same semantics as :class:`UltraNestFit`.
     source_bounds : dict, optional
         Override flat-prior bounds for ``gamma`` / ``log10_rmax`` / ``m``
@@ -941,6 +946,7 @@ class UltraNestFractionsFit(object):
         max_step=1e-2,
         sample_xmax_shift=False,
         use_corr_residual=False,
+        solver="etd2",
     ):
         self.prince_run = prince_run
         self.spectrum = spectrum
@@ -998,7 +1004,7 @@ class UltraNestFractionsFit(object):
         self._n_source_dims = len(param_names_base)
 
         self.walker = MultiRHSWalker(
-            prince_run, spectrum, xmax, xrms, progressbar=False
+            prince_run, spectrum, xmax, xrms, progressbar=False, solver=solver
         )
         self.sampler = None
         self.result = None
@@ -1129,7 +1135,7 @@ class UltraNestFractionsFit(object):
         # for each pid in "CR" (= all nucleus species in the kernel) we need
         # (lidx, uidx) to slice the state array and A to scale the energy
         # axis. The common output egrid is also fixed by `prince_run`.
-        from prince_cr.util import is_nucleus
+        from prince_ultra.util import is_nucleus
         sample_result = sample_result
         cr_pids = [s for s in sample_result.known_species if is_nucleus(s)]
         species_info = []

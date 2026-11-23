@@ -917,6 +917,9 @@ class UltraNestFractionsFit(object):
     prince_run, spectrum, xmax, xrms, particle_ids, xmax_model, Emin,
     use_corr, sclass, m_kind, initial_z, final_z, max_step, solver
         Same semantics as :class:`UltraNestFit`.
+    xmax_sys, sigma_sys
+        Xmax systematics as in :class:`UHECROptimizer`; ``xmax_sys="cov"``
+        profiles them in closed form and excludes ``sample_xmax_shift``.
     source_bounds : dict, optional
         Override flat-prior bounds for ``gamma`` / ``log10_rmax`` / ``m``
         / ``deltaE``. Defaults to :data:`FRACTIONS_SOURCE_BOUNDS`.
@@ -947,6 +950,8 @@ class UltraNestFractionsFit(object):
         sample_xmax_shift=False,
         use_corr_residual=False,
         solver="etd2",
+        xmax_sys="shift",
+        sigma_sys="correlated",
     ):
         self.prince_run = prince_run
         self.spectrum = spectrum
@@ -965,6 +970,10 @@ class UltraNestFractionsFit(object):
         self.use_corr = bool(use_corr)
         self.use_corr_residual = bool(use_corr_residual)
         self.sample_xmax_shift = bool(sample_xmax_shift)
+        if xmax_sys == "cov" and self.sample_xmax_shift:
+            raise ValueError("xmax_sys='cov' profiles the Xmax systematics; set sample_xmax_shift=False")
+        self.xmax_sys = xmax_sys
+        self.sigma_sys = sigma_sys
         self.sclass = sclass
         self.m_kind = m_kind
         self.initial_z = initial_z
@@ -1099,6 +1108,8 @@ class UltraNestFractionsFit(object):
             use_corr=self.use_corr,
             use_corr_residual=self.use_corr_residual,
             apply_auger_xmax_shift=False,
+            xmax_sys=self.xmax_sys,
+            sigma_sys=self.sigma_sys,
         )
 
     def _ensure_batch_state(self, sample_result):
@@ -1177,6 +1188,7 @@ class UltraNestFractionsFit(object):
             "corr_indices": getattr(opt, "_corr_indices", None),
             "cov_residual_sub": getattr(opt, "_cov_residual_sub", None),
             "use_corr_residual": opt.use_corr_residual,
+            "xsys": opt._xsys,
             # Model egrid (extracted from the result via the optimizer's interps)
             "egrid_spec_model": opt.intp_spectrum.x.copy(),
             "egrid_xmax_model": opt.intp_mean_lnA.x.copy(),
@@ -1303,8 +1315,11 @@ class UltraNestFractionsFit(object):
             xshift_K[:, None] * XsU[None, :],
             xshift_K[:, None] * XsL[None, :],
         )
-        delta_x_K = delta_x_K + xshift_corr_x
-        chi2_xmax_K = ((delta_x_K / Xs[None, :]) ** 2).sum(axis=1)
+        if bs["xsys"] is not None:
+            chi2_xmax_K = bs["xsys"].chi2_mean(delta_x_K)
+        else:
+            delta_x_K = delta_x_K + xshift_corr_x
+            chi2_xmax_K = ((delta_x_K / Xs[None, :]) ** 2).sum(axis=1)
 
         # ----- chi²_VarXmax (same selection, same nuisance) -----
         Rv = bs["XRMS_val"][sl_x]
@@ -1317,8 +1332,11 @@ class UltraNestFractionsFit(object):
             xshift_K[:, None] * RsU[None, :],
             xshift_K[:, None] * RsL[None, :],
         )
-        delta_r_K = delta_r_K + xshift_corr_r
-        chi2_var_K = ((delta_r_K / Rs[None, :]) ** 2).sum(axis=1)
+        if bs["xsys"] is not None:
+            chi2_var_K = bs["xsys"].chi2_sigma(delta_r_K)
+        else:
+            delta_r_K = delta_r_K + xshift_corr_r
+            chi2_var_K = ((delta_r_K / Rs[None, :]) ** 2).sum(axis=1)
 
         # ----- chi²_spectrum with closed-form total-norm profile -----
         if bs["use_corr"]:

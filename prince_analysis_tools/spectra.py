@@ -548,7 +548,11 @@ Xmax2025, XRMS2025 = _build_xmax2025_dicts()
 # sys_up / sys_low are the asymmetric energy-dependent systematic
 # magnitudes (both positive). Source: xmaxMomentsTable.tex from the
 # arXiv source bundle, mirrored in
-# raw/lit/pierreauger-2026qbt/xmaxMomentsTable.tex.
+# raw/lit/pierreauger-2026qbt/xmaxMomentsTable.tex; equal to
+# xmaxMoments.txt of the data release (Zenodo 10.5281/zenodo.18024023).
+# The Xmax-scale systematic and its bin-to-bin correlation come from
+# the release tables in data/auger_fd_2026/ (keys scale_sys_Up/Low,
+# corr_Up/Low of Xmax2026FD; used by xmax_sys.XmaxSystematics).
 # Integral bin upper edge encoded as 20.0 (nominal); see lit-note
 # for the caveat.
 # ==================================================================
@@ -584,6 +588,10 @@ def _build_xmax2026FD_dicts():
     lo = (10 ** t[0] * u.eV).to_value(u.GeV)
     hi = (10 ** t[1] * u.eV).to_value(u.GeV)
     centre = (10 ** t[2] * u.eV).to_value(u.GeV)
+    release = path.join(datadir, "auger_fd_2026")
+    scale = np.loadtxt(path.join(release, "xmaxSystematics.txt"))
+    if not np.allclose(scale[:, 1], t[0]):
+        raise ValueError("xmaxSystematics.txt does not match the energy bins of the moments table")
     xmax = {
         "energy": centre,
         "energy_Low": centre - lo,
@@ -592,6 +600,10 @@ def _build_xmax2026FD_dicts():
         "stat": t[5],
         "sys_Up": t[6],
         "sys_Low": t[7],
+        "scale_sys_Up": scale[:, 3],
+        "scale_sys_Low": -scale[:, 4],
+        "corr_Up": np.loadtxt(path.join(release, "correlationSysPlus.txt")),
+        "corr_Low": np.loadtxt(path.join(release, "correlationSysMinus.txt")),
     }
     xrms = {
         "energy": centre,

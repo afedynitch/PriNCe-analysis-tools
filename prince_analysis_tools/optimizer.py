@@ -1,5 +1,8 @@
 import numpy as np
 from .xmax import XmaxSimple
+from .xmax_sys import XmaxSystematics
+
+XMAX_SYS = ("shift", "cov")
 
 
 class UHECROptimizer(object):
@@ -17,6 +20,8 @@ class UHECROptimizer(object):
         corr_jitter=1e-3,
         apply_auger_xmax_shift=False,
         use_corr_residual=False,
+        xmax_sys="shift",
+        sigma_sys="correlated",
     ):
         """Per-cell χ² + iMinuit inner fit for UHECR source-parameter scans.
 
@@ -66,7 +71,20 @@ class UHECROptimizer(object):
             side. Requires a supported ``xmax_model``
             ({"epos","sibyll","qgsjet"}). Default False reproduces the
             pre-2026-05-12 chi² exactly.
+        xmax_sys : {"shift", "cov"}
+            Treatment of the Xmax systematics. ``"shift"`` (default): the
+            scalar ``xmax_shift`` nuisance on stat-only errors. ``"cov"``:
+            the Xmax-scale systematic with its published bin-to-bin
+            correlation and a separate nuisance for σ(Xmax), profiled in
+            closed form (:class:`xmax_sys.XmaxSystematics`); needs a data
+            set with the correlation (``Xmax2026FD``) and ``xmax_shift=0``.
+        sigma_sys : {"correlated", "uncorrelated"}
+            σ(Xmax) systematic with ``xmax_sys="cov"``: one nuisance common
+            to all bins, or added per bin in quadrature.
         """
+        if xmax_sys not in XMAX_SYS:
+            raise ValueError("xmax_sys must be one of {}, got {!r}".format(XMAX_SYS, xmax_sys))
+        self.xmax_sys = xmax_sys
         self.Emin = Emin
 
         if xmax_model is None or xmax_model == "epos":
@@ -104,6 +122,11 @@ class UHECROptimizer(object):
         self.Xmax = Xmax
         self.egrid_xmax = Xmax["energy"]
         self.XRMS = XRMS
+        self._xsys = None
+        if xmax_sys == "cov":
+            self._xsys = XmaxSystematics(
+                Xmax, XRMS, self.egrid_xmax > Emin, sigma_sys=sigma_sys
+            )
 
         self.lst_res = np.array(single_results)
         if norms is None:
@@ -323,6 +346,12 @@ class UHECROptimizer(object):
         if auger_dxmax is not None:
             model_xmax = model_xmax + float(auger_dxmax)
 
+        if self._xsys is not None:
+            if xmax_shift != 0.0:
+                raise ValueError("xmax_shift must be 0 with xmax_sys='cov'")
+            delta = (model_xmax - self.Xmax["val"][sl]).ravel()
+            return float(self._xsys.chi2_mean(delta))
+
         if xmax_shift == 0.0:
             delta = model_xmax - self.Xmax["val"][sl]
         elif xmax_shift > 0.0:
@@ -353,6 +382,11 @@ class UHECROptimizer(object):
 
         # chi2 for values above Emin
         sl = np.argwhere(self.egrid_xmax > self.Emin)
+        if self._xsys is not None:
+            if xmax_shift != 0.0:
+                raise ValueError("xmax_shift must be 0 with xmax_sys='cov'")
+            delta = (self.res_sigma_xmax[sl] - self.XRMS["val"][sl]).ravel()
+            return float(self._xsys.chi2_sigma(delta))
         if xmax_shift == 0.0:
             delta = self.res_sigma_xmax[sl] - self.XRMS["val"][sl]
         elif xmax_shift > 0.0:
@@ -376,6 +410,20 @@ class UHECROptimizer(object):
         # print '\n \n'
 
         return np.sum((delta / error) ** 2)
+
+    def get_xmax_pulls(self, auger_dxmax=None):
+        """Best-fit Xmax nuisances of the current combined result (``xmax_sys="cov"``).
+
+        Returns the dict of :meth:`xmax_sys.XmaxSystematics.pulls`.
+        """
+        if self._xsys is None:
+            raise RuntimeError("get_xmax_pulls needs xmax_sys='cov'")
+        sel = self._xsys.sel
+        model_xmax = self.res_xmax[sel] + (0.0 if auger_dxmax is None else float(auger_dxmax))
+        return self._xsys.pulls(
+            model_xmax - self.Xmax["val"][sel],
+            self.res_sigma_xmax[sel] - self.XRMS["val"][sel],
+        )
 
     def get_chi2_auger_dxmax_prior(self, auger_dxmax):
         """Asymmetric-Gaussian prior penalty on ``auger_dxmax``.
